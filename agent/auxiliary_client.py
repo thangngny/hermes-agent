@@ -3808,7 +3808,7 @@ def resolve_provider_client(
         # credential is registered for this provider alias.
         if explicit_api_key:
             api_key = explicit_api_key.strip() or api_key
-        if not api_key:
+        if not api_key and provider != "vertex":
             tried_sources = list(pconfig.api_key_env_vars)
             if provider == "copilot":
                 tried_sources.append("gh auth token")
@@ -3828,7 +3828,7 @@ def resolve_provider_client(
         default_model = _get_aux_model_for_provider(provider)
         final_model = _normalize_resolved_model(model or default_model, provider)
 
-        if provider == "gemini":
+        if provider in {"gemini", "vertex"}:
             from agent.gemini_native_adapter import GeminiNativeClient, is_native_gemini_base_url
 
             if is_native_gemini_base_url(base_url):
@@ -5126,6 +5126,12 @@ def call_llm(
             # through OpenRouter (which causes confusing 404s).
             _explicit = (resolved_provider or "").strip().lower()
             if _explicit and _explicit not in {"auto", "openrouter", "custom"}:
+                if _explicit == "vertex":
+                    raise RuntimeError(
+                        "Provider 'vertex' requires ADC credentials. Run "
+                        "`gcloud auth application-default login` and set "
+                        "GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION (or VERTEX_AI_*) env."
+                    )
                 raise RuntimeError(
                     f"Provider '{_explicit}' is set in config.yaml but no API key "
                     f"was found. Set the {_explicit.upper()}_API_KEY environment "
@@ -5627,6 +5633,12 @@ async def async_call_llm(
         if client is None:
             _explicit = (resolved_provider or "").strip().lower()
             if _explicit and _explicit not in {"auto", "openrouter", "custom"}:
+                if _explicit == "vertex":
+                    raise RuntimeError(
+                        "Provider 'vertex' requires ADC credentials. Run "
+                        "`gcloud auth application-default login` and set "
+                        "GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION (or VERTEX_AI_*) env."
+                    )
                 raise RuntimeError(
                     f"Provider '{_explicit}' is set in config.yaml but no API key "
                     f"was found. Set the {_explicit.upper()}_API_KEY environment "

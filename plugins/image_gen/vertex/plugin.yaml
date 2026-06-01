@@ -1,0 +1,9 @@
+name: vertex
+version: 1.0.0
+description: "Vertex Gemini image generation backend using Google Gen AI SDK in Vertex mode."
+author: Agent-C-level
+kind: backend
+requires_env:
+  - GOOGLE_CLOUD_PROJECT
+  - GOOGLE_CLOUD_LOCATION
+  - GOOGLE_GENAI_USE_VERTEXAI

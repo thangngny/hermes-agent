@@ -237,6 +237,14 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         api_key_env_vars=("GOOGLE_API_KEY", "GEMINI_API_KEY"),
         base_url_env_var="GEMINI_BASE_URL",
     ),
+    "vertex": ProviderConfig(
+        id="vertex",
+        name="Google Vertex AI",
+        auth_type="api_key",
+        # Marker base URL handled by GeminiNativeClient in Vertex mode.
+        inference_base_url="vertex://google",
+        api_key_env_vars=(),
+    ),
     "zai": ProviderConfig(
         id="zai",
         name="Z.AI / GLM",

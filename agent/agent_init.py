@@ -856,6 +856,13 @@ def init_agent(
                             _fb_resolved = True
                             break
                     if not _fb_resolved:
+                        if _explicit == "vertex":
+                            raise RuntimeError(
+                                "Provider 'vertex' is set in config.yaml but ADC credentials "
+                                "were not available. Run `gcloud auth application-default login` "
+                                "and set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION "
+                                "(or VERTEX_AI_* env)."
+                            )
                         raise RuntimeError(
                             f"Provider '{_explicit}' is set in config.yaml but no API key "
                             f"was found. Set the {_env_hint} environment "

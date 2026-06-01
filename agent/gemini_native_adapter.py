@@ -20,6 +20,8 @@ import asyncio
 import base64
 import json
 import logging
+import os
+import subprocess
 import time
 import uuid
 from types import SimpleNamespace
@@ -32,6 +34,8 @@ from agent.gemini_schema import sanitize_gemini_tool_parameters
 logger = logging.getLogger(__name__)
 
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+DEFAULT_VERTEX_LOCATION = "global"
+_VERTEX_MARKERS = ("vertex://", "vertex-ai://")
 
 # Published max output-token ceiling shared by every current Gemini text model
 # (2.5 + 3.x: flash, flash-lite, pro). Used as the default when the caller
@@ -46,9 +50,31 @@ def is_native_gemini_base_url(base_url: str) -> bool:
     normalized = str(base_url or "").strip().rstrip("/").lower()
     if not normalized:
         return False
+    if normalized.startswith(_VERTEX_MARKERS):
+        return True
     if "generativelanguage.googleapis.com" not in normalized:
         return False
     return not normalized.endswith("/openai")
+
+
+def _vertex_project_and_location() -> tuple[str, str]:
+    project = (
+        os.getenv("VERTEX_AI_PROJECT", "").strip()
+        or os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
+        or os.getenv("GOOGLE_PROJECT_ID", "").strip()
+    )
+    location = (
+        os.getenv("VERTEX_AI_LOCATION", "").strip()
+        or os.getenv("GOOGLE_CLOUD_LOCATION", "").strip()
+        or os.getenv("GOOGLE_LOCATION", "").strip()
+        or DEFAULT_VERTEX_LOCATION
+    )
+    if not project:
+        raise RuntimeError(
+            "Vertex mode requires project env. Set one of: "
+            "VERTEX_AI_PROJECT, GOOGLE_CLOUD_PROJECT, GOOGLE_PROJECT_ID."
+        )
+    return project, location
 
 
 def probe_gemini_tier(
@@ -827,24 +853,32 @@ class GeminiNativeClient:
     def __init__(
         self,
         *,
-        api_key: str,
+        api_key: str = "",
         base_url: Optional[str] = None,
         default_headers: Optional[Dict[str, str]] = None,
         timeout: Any = None,
         http_client: Optional[httpx.Client] = None,
         **_: Any,
     ) -> None:
-        if not (api_key or "").strip():
+        normalized_base = (base_url or DEFAULT_GEMINI_BASE_URL).rstrip("/")
+        self._vertex_mode = normalized_base.lower().startswith(_VERTEX_MARKERS)
+
+        if not self._vertex_mode and not (api_key or "").strip():
             raise RuntimeError(
                 "Gemini native client requires an API key, but none was provided. "
                 "Set GOOGLE_API_KEY or GEMINI_API_KEY in your environment / ~/.hermes/.env "
                 "(get one at https://aistudio.google.com/app/apikey), or run `hermes setup` "
                 "to configure the Google provider."
             )
-        self.api_key = api_key
-        normalized_base = (base_url or DEFAULT_GEMINI_BASE_URL).rstrip("/")
-        if normalized_base.endswith("/openai"):
+        self.api_key = (api_key or "").strip()
+        if not self._vertex_mode and normalized_base.endswith("/openai"):
             normalized_base = normalized_base[: -len("/openai")]
+        self._vertex_project = ""
+        self._vertex_location = DEFAULT_VERTEX_LOCATION
+        if self._vertex_mode:
+            self._vertex_project, self._vertex_location = _vertex_project_and_location()
+            self._vertex_access_token = ""
+            self._vertex_access_token_expires_at = 0.0
         self.base_url = normalized_base
         self._default_headers = dict(default_headers or {})
         self.chat = _GeminiChatNamespace(self)
@@ -870,11 +904,68 @@ class GeminiNativeClient:
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "x-goog-api-key": self.api_key,
             "User-Agent": "hermes-agent (gemini-native)",
         }
+        if self._vertex_mode:
+            headers["Authorization"] = f"Bearer {self._vertex_access_token_now()}"
+        else:
+            headers["x-goog-api-key"] = self.api_key
         headers.update(self._default_headers)
         return headers
+
+    def _vertex_access_token_now(self) -> str:
+        now = time.time()
+        if self._vertex_access_token and now < self._vertex_access_token_expires_at:
+            return self._vertex_access_token
+
+        token = ""
+        try:
+            import google.auth  # type: ignore
+            from google.auth.transport.requests import Request  # type: ignore
+
+            creds, _project = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            creds.refresh(Request())
+            token = str(getattr(creds, "token", "") or "").strip()
+        except Exception as exc:
+            logger.debug("Vertex ADC token refresh via google.auth failed: %s", exc)
+
+        if not token:
+            try:
+                out = subprocess.check_output(
+                    ["gcloud", "auth", "application-default", "print-access-token"],
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=12,
+                )
+                token = out.strip()
+            except Exception as exc:
+                raise RuntimeError(
+                    "Vertex mode requires ADC access token. "
+                    "Run `gcloud auth application-default login` and ensure gcloud is available."
+                ) from exc
+
+        self._vertex_access_token = token
+        self._vertex_access_token_expires_at = time.time() + 300
+        return token
+
+    def _request_url(self, model: str, *, stream: bool) -> str:
+        if self._vertex_mode:
+            host = "aiplatform.googleapis.com"
+            if self._vertex_location and self._vertex_location.lower() != "global":
+                host = f"{self._vertex_location}-aiplatform.googleapis.com"
+            base = (
+                f"https://{host}/v1/"
+                f"projects/{self._vertex_project}/locations/{self._vertex_location}/"
+                f"publishers/google/models/{model}"
+            )
+            if stream:
+                return f"{base}:streamGenerateContent?alt=sse"
+            return f"{base}:generateContent"
+        if stream:
+            return f"{self.base_url}/models/{model}:streamGenerateContent?alt=sse"
+        return f"{self.base_url}/models/{model}:generateContent"
 
     @staticmethod
     def _advance_stream_iterator(iterator: Iterator[_GeminiStreamChunk]) -> tuple[bool, Optional[_GeminiStreamChunk]]:
@@ -917,7 +1008,7 @@ class GeminiNativeClient:
         if stream:
             return self._stream_completion(model=model, request=request, timeout=timeout)
 
-        url = f"{self.base_url}/models/{model}:generateContent"
+        url = self._request_url(model, stream=False)
         response = self._http.post(url, json=request, headers=self._headers(), timeout=timeout)
         if response.status_code != 200:
             raise gemini_http_error(response)
@@ -933,7 +1024,12 @@ class GeminiNativeClient:
         return translate_gemini_response(payload, model=model)
 
     def _stream_completion(self, *, model: str, request: Dict[str, Any], timeout: Any = None) -> Iterator[_GeminiStreamChunk]:
-        url = f"{self.base_url}/models/{model}:streamGenerateContent?alt=sse"
+        if self._vertex_mode:
+            raise GeminiAPIError(
+                "Vertex streaming is not supported by this transport path; use non-streaming.",
+                code="vertex_stream_not_supported",
+            )
+        url = self._request_url(model, stream=True)
         stream_headers = dict(self._headers())
         stream_headers["Accept"] = "text/event-stream"
 

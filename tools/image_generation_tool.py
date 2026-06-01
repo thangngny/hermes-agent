@@ -1030,8 +1030,31 @@ IMAGE_GENERATE_SCHEMA = {
 }
 
 
+IMAGE_GEN_PROVIDER_ENV_KEYS = (
+    "HERMES_IMAGE_GEN_PROVIDER",
+    "IMAGE_GEN_PROVIDER",
+    "IMAGE_PROVIDER",
+)
+
+IMAGE_GEN_MODEL_ENV_KEYS = (
+    "HERMES_IMAGE_GEN_MODEL",
+    "VERTEX_IMAGE_MODEL",
+    "GEMINI_IMAGE_MODEL",
+    "IMAGE_MODEL",
+    "FAL_IMAGE_MODEL",
+)
+
+
 def _read_configured_image_model():
-    """Return the value of ``image_gen.model`` from config.yaml, or None."""
+    """Return the selected image model from env/config, or None."""
+    # Text-model Vertex provider and image-gen providers are separate
+    # registries. These env overrides let smoke tests exercise image-gen
+    # dispatch without editing user config.yaml.
+    for key in IMAGE_GEN_MODEL_ENV_KEYS:
+        value = os.getenv(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
     try:
         from hermes_cli.config import load_config
         cfg = load_config()
@@ -1046,7 +1069,7 @@ def _read_configured_image_model():
 
 
 def _read_configured_image_provider():
-    """Return the value of ``image_gen.provider`` from config.yaml, or None.
+    """Return the selected image provider from env/config, or None.
 
     We only consult the plugin registry when this is explicitly set — an
     unset value keeps users on the in-tree FAL fallback even when other
@@ -1055,7 +1078,16 @@ def _read_configured_image_provider():
     explicitly routes through ``plugins/image_gen/fal/`` (which delegates
     back into this module's pipeline via call-time indirection — see
     issue #26241).
+
+    Text-model Vertex provider and image-gen providers are separate
+    registries. Env overrides are intentionally supported here so smoke
+    tests can dispatch ``vertex``/``fal`` without editing config.yaml.
     """
+    for key in IMAGE_GEN_PROVIDER_ENV_KEYS:
+        value = os.getenv(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
     try:
         from hermes_cli.config import load_config
         cfg = load_config()
