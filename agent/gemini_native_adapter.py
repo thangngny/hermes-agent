@@ -306,42 +306,127 @@ def _translate_tool_result_to_gemini(
     }
 
 
+def _synthesized_missing_tool_result(tool_name: str, tool_call_id: str) -> Dict[str, Any]:
+    return {
+        "tool_call_id": tool_call_id,
+        "name": tool_name,
+        "content": json.dumps(
+            {
+                "error": (
+                    "Hermes repaired a dangling Gemini tool turn by "
+                    "synthesizing a safe fallback response."
+                ),
+                "tool_call_id": tool_call_id,
+            },
+            ensure_ascii=False,
+        ),
+    }
+
+
+def _build_gemini_tool_response_parts(
+    tool_calls: List[Dict[str, Any]],
+    tool_messages: List[Dict[str, Any]],
+    tool_name_by_call_id: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    tool_messages_by_id: Dict[str, Dict[str, Any]] = {}
+    extra_tool_messages: List[Dict[str, Any]] = []
+    for tool_message in tool_messages:
+        if not isinstance(tool_message, dict):
+            continue
+        tool_call_id = str(tool_message.get("tool_call_id") or "")
+        if tool_call_id and tool_call_id not in tool_messages_by_id:
+            tool_messages_by_id[tool_call_id] = tool_message
+        else:
+            extra_tool_messages.append(tool_message)
+
+    response_parts: List[Dict[str, Any]] = []
+    for position, tool_call in enumerate(tool_calls):
+        if not isinstance(tool_call, dict):
+            continue
+        tool_call_id = str(tool_call.get("id") or tool_call.get("call_id") or "")
+        tool_name = str(((tool_call.get("function") or {}).get("name") or ""))
+        if tool_call_id and tool_name:
+            tool_name_by_call_id[tool_call_id] = tool_name
+
+        tool_message = None
+        if tool_call_id and tool_call_id in tool_messages_by_id:
+            tool_message = tool_messages_by_id.pop(tool_call_id)
+        elif extra_tool_messages:
+            tool_message = extra_tool_messages.pop(0)
+            logger.warning(
+                "Gemini request repair: positional tool-result fallback used "
+                "for call_id=%s name=%s at position=%d",
+                tool_call_id or "-",
+                tool_name or "-",
+                position,
+            )
+        else:
+            logger.warning(
+                "Gemini request repair: missing tool response for call_id=%s "
+                "name=%s; synthesizing a safe fallback response",
+                tool_call_id or "-",
+                tool_name or "-",
+            )
+            tool_message = _synthesized_missing_tool_result(tool_name, tool_call_id)
+
+        if tool_call_id and not tool_message.get("tool_call_id"):
+            tool_message = {**tool_message, "tool_call_id": tool_call_id}
+        if tool_name and not tool_message.get("name"):
+            tool_message = {**tool_message, "name": tool_name}
+        response_parts.append(
+            _translate_tool_result_to_gemini(
+                tool_message,
+                tool_name_by_call_id=tool_name_by_call_id,
+            )
+        )
+
+    if tool_messages_by_id or extra_tool_messages:
+        logger.warning(
+            "Gemini request repair: dropped %d extra tool result(s) beyond the "
+            "expected %d response(s)",
+            len(tool_messages_by_id) + len(extra_tool_messages),
+            len(tool_calls),
+        )
+
+    return response_parts
+
+
 def _build_gemini_contents(messages: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
     system_text_parts: List[str] = []
     contents: List[Dict[str, Any]] = []
     tool_name_by_call_id: Dict[str, str] = {}
 
-    for msg in messages:
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
         if not isinstance(msg, dict):
+            i += 1
             continue
+
         role = str(msg.get("role") or "user")
 
         if role == "system":
             system_text_parts.append(_coerce_content_to_text(msg.get("content")))
+            i += 1
             continue
 
         if role in {"tool", "function"}:
-            contents.append(
-                {
-                    "role": "user",
-                    "parts": [
-                        _translate_tool_result_to_gemini(
-                            msg,
-                            tool_name_by_call_id=tool_name_by_call_id,
-                        )
-                    ],
-                }
+            logger.warning(
+                "Gemini request repair: dropping orphan tool message at index=%d "
+                "tool_call_id=%s",
+                i,
+                msg.get("tool_call_id") or "-",
             )
+            i += 1
             continue
 
         gemini_role = "model" if role == "assistant" else "user"
         parts: List[Dict[str, Any]] = []
-
         content_parts = _extract_multimodal_parts(msg.get("content"))
         parts.extend(content_parts)
 
         tool_calls = msg.get("tool_calls") or []
-        if isinstance(tool_calls, list):
+        if role == "assistant" and isinstance(tool_calls, list) and tool_calls:
             for tool_call in tool_calls:
                 if isinstance(tool_call, dict):
                     tool_call_id = str(tool_call.get("id") or tool_call.get("call_id") or "")
@@ -350,8 +435,35 @@ def _build_gemini_contents(messages: List[Dict[str, Any]]) -> tuple[List[Dict[st
                         tool_name_by_call_id[tool_call_id] = tool_name
                     parts.append(_translate_tool_call_to_gemini(tool_call))
 
+            if parts:
+                contents.append({"role": gemini_role, "parts": parts})
+
+            i += 1
+            tool_messages: List[Dict[str, Any]] = []
+            while i < len(messages):
+                next_msg = messages[i]
+                if not isinstance(next_msg, dict):
+                    i += 1
+                    continue
+                next_role = str(next_msg.get("role") or "user")
+                if next_role not in {"tool", "function"}:
+                    break
+                tool_messages.append(next_msg)
+                i += 1
+
+            response_parts = _build_gemini_tool_response_parts(
+                [tc for tc in tool_calls if isinstance(tc, dict)],
+                tool_messages,
+                tool_name_by_call_id,
+            )
+            if response_parts:
+                contents.append({"role": "user", "parts": response_parts})
+            continue
+
         if parts:
             contents.append({"role": gemini_role, "parts": parts})
+
+        i += 1
 
     system_instruction = None
     joined_system = "\n".join(part for part in system_text_parts if part).strip()

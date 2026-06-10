@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -83,6 +84,126 @@ def test_build_native_request_uses_original_function_name_for_tool_result():
 
     tool_response = request["contents"][1]["parts"][0]["functionResponse"]
     assert tool_response["name"] == "get_weather"
+
+
+def test_build_native_request_groups_parallel_tool_results_into_one_response_turn():
+    from agent.gemini_native_adapter import build_gemini_request
+
+    request = build_gemini_request(
+        messages=[
+            {"role": "user", "content": "Run the tools."},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "search",
+                            "arguments": '{"q": "hermes"}',
+                        },
+                    },
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {
+                            "name": "terminal",
+                            "arguments": '{"command": "echo HERMES_TOOL_OK"}',
+                        },
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "name": "search",
+                "content": '{"results": ["hermes-agent"]}',
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_2",
+                "name": "terminal",
+                "content": "Error executing tool 'terminal': boom",
+            },
+        ],
+        tools=[],
+        tool_choice=None,
+    )
+
+    assert len(request["contents"]) == 3
+    assistant_turn = request["contents"][1]
+    response_turn = request["contents"][2]
+
+    assert assistant_turn["role"] == "model"
+    assert len(assistant_turn["parts"]) == 2
+    assert assistant_turn["parts"][0]["functionCall"]["name"] == "search"
+    assert assistant_turn["parts"][1]["functionCall"]["name"] == "terminal"
+
+    assert response_turn["role"] == "user"
+    assert len(response_turn["parts"]) == 2
+    assert response_turn["parts"][0]["functionResponse"]["name"] == "search"
+    assert response_turn["parts"][0]["functionResponse"]["response"] == {
+        "results": ["hermes-agent"],
+    }
+    assert response_turn["parts"][1]["functionResponse"]["name"] == "terminal"
+    assert response_turn["parts"][1]["functionResponse"]["response"] == {
+        "output": "Error executing tool 'terminal': boom",
+    }
+
+
+def test_build_native_request_synthesizes_missing_tool_response_for_dangling_call():
+    from agent.gemini_native_adapter import build_gemini_request
+
+    request = build_gemini_request(
+        messages=[
+            {"role": "user", "content": "Please search."},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "search",
+                            "arguments": '{"q": "hermes"}',
+                        },
+                    }
+                ],
+            },
+        ],
+        tools=[],
+        tool_choice=None,
+    )
+
+    assert len(request["contents"]) == 3
+    response = request["contents"][2]["parts"][0]["functionResponse"]
+    assert response["name"] == "search"
+    assert response["response"]["tool_call_id"] == "call_1"
+    assert "safe fallback response" in response["response"]["error"]
+
+
+def test_build_native_request_drops_orphan_tool_messages():
+    from agent.gemini_native_adapter import build_gemini_request
+
+    request = build_gemini_request(
+        messages=[
+            {
+                "role": "tool",
+                "tool_call_id": "orphan",
+                "name": "search",
+                "content": "stray tool result",
+            },
+            {"role": "user", "content": "hello"},
+        ],
+        tools=[],
+        tool_choice=None,
+    )
+
+    assert len(request["contents"]) == 1
+    assert request["contents"][0]["role"] == "user"
+    assert request["contents"][0]["parts"][0]["text"] == "hello"
 
 
 def test_build_native_request_strips_json_schema_only_fields_from_tool_parameters():
@@ -247,8 +368,7 @@ def test_native_client_rejects_empty_api_key_with_actionable_message():
         assert "aistudio.google.com" in msg
 
 
-@pytest.mark.asyncio
-async def test_async_native_client_streams_without_requiring_async_iterator_from_sync_client():
+def test_async_native_client_streams_without_requiring_async_iterator_from_sync_client():
     from agent.gemini_native_adapter import AsyncGeminiNativeClient
 
     chunk = SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="hi"), finish_reason=None)])
@@ -268,12 +388,15 @@ async def test_async_native_client_streams_without_requiring_async_iterator_from
         close=lambda: None,
     )
 
-    async_client = AsyncGeminiNativeClient(sync_client)
-    stream = await async_client.chat.completions.create(stream=True)
-    collected = []
-    async for item in stream:
-        collected.append(item)
-    assert collected == [chunk]
+    async def _exercise():
+        async_client = AsyncGeminiNativeClient(sync_client)
+        stream = await async_client.chat.completions.create(stream=True)
+        collected = []
+        async for item in stream:
+            collected.append(item)
+        assert collected == [chunk]
+
+    asyncio.run(_exercise())
 
 
 def test_stream_event_translation_emits_tool_call_delta_with_stable_index():
