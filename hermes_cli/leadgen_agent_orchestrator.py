@@ -30,9 +30,18 @@ _READ_LATEST_RE = re.compile(
     r"(?iu)\b(đọc\s*lead\s*mới\s*nhất|xem\s*danh\s*sách\s*lead|lead\s*mới\s*cho\s*dukick|đọc\s*kết\s*quả\s*lead-gen-agent)\b"
 )
 _MAX_RESULTS_RE = re.compile(r"(?iu)\b(\d+)\s*lead\b")
+_MAX_RESULTS_CONTROL_RE = re.compile(r"(?iu)(?:,|\s)*tối\s*đa\s*\d+\s*lead\b|(?:,|\s)*\d+\s*lead\b")
 _COUNTRY_VN_RE = re.compile(r"(?iu)\b(việt\s*nam|vn|hà\s*nội|hồ\s*chí\s*minh|sài\s*gòn)\b")
 _COUNTRY_US_RE = re.compile(r"(?iu)\b(us|usa|mỹ|hoa\s*kỳ|united\s*states)\b")
 _QUERY_REFINEMENT_RE = re.compile(r"(?iu)\b(ngành|đổi|chuyển|sang)\b")
+_QUERY_STOPWORDS_RE = re.compile(
+    r"(?iu)\b("
+    r"tìm|khảo\s*sát|search|lead|khách\s*hàng(?:\s*tiềm\s*năng)?|"
+    r"cho|dukick(?:\s*studio)?|ở|tại|việt\s*nam|vn|mỹ|us|usa|"
+    r"tối\s*đa|giúp\s*tôi|ngành|đổi|chuyển|sang|đi"
+    r")\b"
+)
+_QUERY_TRAILING_PUNCT_RE = re.compile(r"[\s,;:.-]+$")
 
 _QUERY_ALIASES: tuple[tuple[str, str], ...] = (
     ("thẩm mỹ viện", "thẩm mỹ viện"),
@@ -45,6 +54,21 @@ _QUERY_ALIASES: tuple[tuple[str, str], ...] = (
     ("supplement", "supplement"),
     ("nhà hàng", "nhà hàng"),
     ("bất động sản", "bất động sản"),
+    ("bđs", "bđs"),
+    ("bds", "bds"),
+    ("dự án căn hộ", "dự án căn hộ"),
+    ("chung cư mở bán", "chung cư mở bán"),
+    ("căn hộ cao cấp", "căn hộ cao cấp"),
+    ("dự án chung cư", "dự án chung cư"),
+    ("căn hộ", "căn hộ"),
+    ("nhà phố", "nhà phố"),
+    ("shophouse", "shophouse"),
+    ("biệt thự", "biệt thự"),
+    ("villa", "villa"),
+    ("đất nền", "đất nền"),
+    ("khu đô thị", "khu đô thị"),
+    ("real estate", "real estate"),
+    ("property", "property"),
     ("khóa học", "khóa học"),
 )
 
@@ -171,11 +195,14 @@ class LeadGenAgentRunner:
             require_success=True,
         )
         self._run_cli(["demo-summary"], request=request, dry_run=False, require_success=True)
-        summary = LeadGenAgentAdapter(self.config).summarize_for_user(language="vi", limit=request.max_results)
-        return (
-            f"Đã chạy xong. Tìm được lead export mới cho Hermes.\n\n"
-            f"{summary}"
-        )
+        adapter = LeadGenAgentAdapter(self.config)
+        export_result = adapter.load_exports()
+        summary = adapter.summarize_for_user(language="vi", limit=request.max_results)
+        if export_result.ok and export_result.lead_count > 0:
+            prefix = f"Đã chạy xong search mới. Tìm được {export_result.lead_count} lead đủ điều kiện export cho Hermes."
+        else:
+            prefix = "Đã chạy xong search mới, nhưng chưa có lead nào đủ điều kiện export cho Hermes."
+        return f"{prefix}\n\n{summary}"
 
     def read_latest(self, *, limit: int = 5, language: str = "vi") -> str:
         return LeadGenAgentAdapter(self.config).summarize_for_user(language=language, limit=limit)
@@ -339,6 +366,31 @@ def orchestrate_sales_lead_request(
             return None
         return LeadGenRouteDecision(runner.read_latest(language=language, limit=5), clear_pending=False)
 
+    if looks_like_explicit_public_web_search_request(text) and _SEARCH_INTENT_RE.search(text) and _LEAD_RE.search(text):
+        return None
+
+    if looks_like_search_request(text):
+        request = parse_lead_search_request(text, config=config)
+        if request is None:
+            return LeadGenRouteDecision(
+                "Em cần rõ ngành/query trước khi lên plan. Ví dụ: `Tìm lead spa ở Việt Nam`, `Tìm 3 lead gym`, hoặc `Tìm lead nha khoa Hà Nội`.",
+                clear_pending=False,
+            )
+
+        preflight = runner.preflight_search(request)
+        pending_request = LeadGenPendingRequest(
+            request=request,
+            estimate_usd=preflight.estimate_usd,
+            preflight_ok=preflight.ok,
+            command_preview=preflight.command_preview,
+            created_at=time.time(),
+        )
+        return LeadGenRouteDecision(
+            _build_preflight_reply(preflight, config=config),
+            pending=pending_request,
+            clear_pending=False,
+        )
+
     if pending is not None and not looks_like_explicit_public_web_search_request(text):
         refined_request = refine_pending_search_request(text, pending=pending, config=config)
         if refined_request is not None:
@@ -358,32 +410,7 @@ def orchestrate_sales_lead_request(
 
     if not looks_like_search_request(text):
         return None
-
-    if looks_like_explicit_public_web_search_request(text):
-        result = LeadGenAgentAdapter(config).load_exports()
-        if result.errors or not result.leads:
-            return None
-
-    request = parse_lead_search_request(text, config=config)
-    if request is None:
-        return LeadGenRouteDecision(
-            "Em cần rõ ngành/query trước khi lên plan. Ví dụ: `Tìm lead spa ở Việt Nam`, `Tìm 3 lead gym`, hoặc `Tìm lead nha khoa Hà Nội`.",
-            clear_pending=False,
-        )
-
-    preflight = runner.preflight_search(request)
-    pending_request = LeadGenPendingRequest(
-        request=request,
-        estimate_usd=preflight.estimate_usd,
-        preflight_ok=preflight.ok,
-        command_preview=preflight.command_preview,
-        created_at=time.time(),
-    )
-    return LeadGenRouteDecision(
-        _build_preflight_reply(preflight, config=config),
-        pending=pending_request,
-        clear_pending=False,
-    )
+    return None
 
 
 def load_pending_search(agent) -> LeadGenPendingRequest | None:
@@ -456,14 +483,12 @@ def _build_preflight_reply(preflight: LeadGenPreflightResult, *, config: LeadGen
 
 
 def _extract_query(text: str) -> str:
-    lowered = text.lower()
+    lowered = (text or "").lower()
     for alias, canonical in _QUERY_ALIASES:
         if alias in lowered:
             return canonical
 
-    cleaned = re.sub(r"(?iu)\b(tìm|khảo\s*sát|search|lead|khách\s*hàng\s*tiềm\s*năng|cho|dukick(?:\s*studio)?|ở|tại|việt\s*nam|vn|mỹ|us|usa)\b", " ", lowered)
-    cleaned = re.sub(r"(?iu)\b\d+\b", " ", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .,:;-")
+    cleaned = _strip_query_control_phrases(lowered)
     return cleaned[:80].strip()
 
 
@@ -535,8 +560,7 @@ def _extract_followup_query(text: str) -> str:
             return canonical
     if not _QUERY_REFINEMENT_RE.search(lowered):
         return ""
-    cleaned = re.sub(r"(?iu)\b(ngành|đổi|chuyển|sang|tìm|khảo\s*sát|search|đi|lead|cho|dukick(?:\s*studio)?)\b", " ", lowered)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .,:;-")
+    cleaned = _strip_query_control_phrases(lowered)
     return cleaned[:80].strip()
 
 
@@ -602,3 +626,14 @@ def _replace_secretish(text: str) -> str:
     if not text:
         return text
     return re.sub(r"(?i)(api[_-]?key|token|secret|bearer|authorization)[^\s]*", "[REDACTED]", text)
+
+
+def _strip_query_control_phrases(text: str) -> str:
+    cleaned = _MAX_RESULTS_CONTROL_RE.sub(" ", text or "")
+    cleaned = re.sub(r"(?iu)(?:,|\s)*(ở|tại)\s*(việt\s*nam|vn|mỹ|us|usa)\b", " ", cleaned)
+    cleaned = re.sub(r"(?iu)(?:,|\s)*cho\s*dukick(?:\s*studio)?\b", " ", cleaned)
+    cleaned = _QUERY_STOPWORDS_RE.sub(" ", cleaned)
+    cleaned = re.sub(r"(?iu)\b\d+\b", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = _QUERY_TRAILING_PUNCT_RE.sub("", cleaned)
+    return cleaned.strip()

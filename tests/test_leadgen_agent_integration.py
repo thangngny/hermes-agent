@@ -235,6 +235,9 @@ def test_live_request_handler_refuses_execution(monkeypatch, tmp_path):
         ("tìm lead spa ở Việt Nam cho Dukick", "spa", "VN", 1),
         ("tìm 3 lead gym", "gym", "VN", 3),
         ("tìm lead nha khoa Mỹ", "nha khoa", "US", 1),
+        ("Tìm lead dự án căn hộ ở Việt Nam cho Dukick, tối đa 3 lead", "dự án căn hộ", "VN", 3),
+        ("Tìm lead chung cư mở bán ở Việt Nam cho Dukick, tối đa 3 lead", "chung cư mở bán", "VN", 3),
+        ("Tìm lead bất động sản ở Việt Nam cho Dukick, tối đa 1 lead", "bất động sản", "VN", 1),
     ],
 )
 def test_parse_lead_search_request(user_text, expected_query, expected_country, expected_max, tmp_path):
@@ -253,6 +256,19 @@ def test_parse_lead_search_caps_results(tmp_path):
     assert request.requested_max_results == 100
     assert request.max_results == 3
     assert request.capped is True
+
+
+def test_parse_lead_search_strips_control_phrases_from_query(tmp_path):
+    request = parse_lead_search_request(
+        "Tìm lead chung cư mở bán ở Việt Nam cho Dukick, tối đa 3 lead giúp tôi",
+        config=_settings(_copy_fixture_repo(tmp_path)),
+    )
+
+    assert request is not None
+    assert request.query == "chung cư mở bán"
+    assert "tối đa" not in request.query
+    assert "dukick" not in request.query
+    assert "việt nam" not in request.query
 
 
 def test_preflight_uses_subprocess_with_dry_run_true(monkeypatch, tmp_path):
@@ -343,6 +359,39 @@ def test_live_run_allowed_only_with_confirmation_and_allow_live_true(monkeypatch
         (["leadgen-agent", "search-leads", "--profile", "dukick_tvc", "--source", "apify", "--country", "VN", "--query", "spa", "--max-results", "1", "--live"], "false"),
         (["leadgen-agent", "demo-summary"], "false"),
     ]
+
+
+def test_live_run_uses_accurate_zero_export_message(monkeypatch, tmp_path):
+    repo = _copy_fixture_repo(tmp_path)
+    (repo / "data" / "output" / "hermes_leads.json").write_text("[]", encoding="utf-8")
+    settings = LeadGenAgentSettings(**{**_settings(repo).__dict__, "allow_live": True})
+    runner = LeadGenAgentRunner(settings)
+    request = LeadGenSearchRequest("bất động sản", "VN", "dukick_tvc", 1, 1.0, 1)
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"ok": True}), stderr=""),
+    )
+    text = runner.run_live_search(request, confirmation="xác nhận chạy live 1 lead")
+
+    assert "Đã chạy xong search mới, nhưng chưa có lead nào đủ điều kiện export cho Hermes." in text
+
+
+def test_live_run_uses_accurate_positive_export_message(monkeypatch, tmp_path):
+    repo = _copy_fixture_repo(tmp_path)
+    settings = LeadGenAgentSettings(**{**_settings(repo).__dict__, "allow_live": True})
+    runner = LeadGenAgentRunner(settings)
+    request = LeadGenSearchRequest("spa", "VN", "dukick_tvc", 1, 1.0, 1)
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"ok": True}), stderr=""),
+    )
+    text = runner.run_live_search(request, confirmation="xác nhận chạy live 1 lead")
+
+    assert "Đã chạy xong search mới. Tìm được 1 lead đủ điều kiện export cho Hermes." in text
 
 
 def test_sales_read_latest_still_uses_read_only_summary(tmp_path):
@@ -552,6 +601,41 @@ def test_orchestrator_follow_up_updates_query_and_replans(monkeypatch, tmp_path)
     ]
 
 
+def test_full_new_request_replaces_pending_request(monkeypatch, tmp_path):
+    repo = _copy_fixture_repo(tmp_path)
+    pending = LeadGenPendingRequest(
+        request=LeadGenSearchRequest("spa", "VN", "dukick_tvc", 1, 1.0, 1),
+        estimate_usd=0.02,
+        preflight_ok=True,
+        command_preview="leadgen-agent search-leads ...",
+        created_at=1.0,
+    )
+    seen_env = []
+
+    def fake_run(cmd, **kwargs):
+        seen_env.append(kwargs["env"]["LEAD_QUERY"])
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps({"apify": {"ok": True, "estimated_cost_usd": 0.02, "reasons": []}}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    decision = orchestrate_sales_lead_request(
+        "Tìm lead chung cư mở bán ở Việt Nam cho Dukick, tối đa 3 lead",
+        profile_name="sales",
+        config=_settings(repo),
+        pending=pending,
+    )
+
+    assert decision is not None
+    assert decision.pending is not None
+    assert decision.pending.request.query == "chung cư mở bán"
+    assert decision.pending.request.max_results == 3
+    assert seen_env == ["chung cư mở bán", "chung cư mở bán"]
+
+
 @pytest.mark.parametrize(
     ("follow_up", "expected_query", "expected_country", "expected_max"),
     [
@@ -641,6 +725,47 @@ def test_confirmation_after_follow_up_uses_latest_pending_request(monkeypatch, t
     assert seen[2][1:] == ("bất động sản", "VN", "1")
 
 
+def test_confirmation_after_full_new_request_uses_latest_clean_query(monkeypatch, tmp_path):
+    repo = _copy_fixture_repo(tmp_path)
+    settings = LeadGenAgentSettings(**{**_settings(repo).__dict__, "allow_live": True})
+    pending = LeadGenPendingRequest(
+        request=LeadGenSearchRequest("spa", "VN", "dukick_tvc", 1, 1.0, 1),
+        estimate_usd=0.02,
+        preflight_ok=True,
+        command_preview="leadgen-agent search-leads ...",
+        created_at=1.0,
+    )
+    seen = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append((cmd, kwargs["env"]["LEAD_QUERY"]))
+        if cmd[1] in {"smoke-plan", "preflight"}:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"apify": {"ok": True, "estimated_cost_usd": 0.02, "reasons": []}}), stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"ok": True}), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    updated = orchestrate_sales_lead_request(
+        "Tìm lead dự án căn hộ ở Việt Nam cho Dukick, tối đa 3 lead",
+        profile_name="sales",
+        config=settings,
+        pending=pending,
+    )
+    assert updated is not None and updated.pending is not None
+
+    decision = orchestrate_sales_lead_request(
+        "ok xác nhận",
+        profile_name="sales",
+        config=settings,
+        pending=updated.pending,
+    )
+
+    assert decision is not None
+    assert decision.clear_pending is True
+    assert seen[0][1] == "dự án căn hộ"
+    assert seen[1][1] == "dự án căn hộ"
+    assert seen[2][1] == "dự án căn hộ"
+
+
 def test_follow_up_stays_in_leadgen_preflight_when_pending_exists(monkeypatch, tmp_path):
     repo = _copy_fixture_repo(tmp_path)
     pending = LeadGenPendingRequest(
@@ -676,6 +801,38 @@ def test_follow_up_stays_in_leadgen_preflight_when_pending_exists(monkeypatch, t
         ["leadgen-agent", "smoke-plan", "--source", "apify"],
         ["leadgen-agent", "preflight", "--source", "apify"],
     ]
+
+
+def test_follow_up_updates_specific_real_estate_alias(monkeypatch, tmp_path):
+    repo = _copy_fixture_repo(tmp_path)
+    pending = LeadGenPendingRequest(
+        request=LeadGenSearchRequest("spa", "VN", "dukick_tvc", 1, 1.0, 1),
+        estimate_usd=0.02,
+        preflight_ok=True,
+        command_preview="leadgen-agent search-leads ...",
+        created_at=1.0,
+    )
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps({"apify": {"ok": True, "estimated_cost_usd": 0.02, "reasons": []}}),
+            stderr="",
+        ),
+    )
+    decision = orchestrate_sales_lead_request(
+        "đổi sang dự án căn hộ",
+        profile_name="sales",
+        config=_settings(repo),
+        pending=pending,
+    )
+
+    assert decision is not None
+    assert decision.pending is not None
+    assert decision.pending.request.query == "dự án căn hộ"
 
 
 def test_explicit_public_web_search_is_still_allowed_with_pending(tmp_path):
