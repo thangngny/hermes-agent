@@ -177,6 +177,43 @@ See `hermes claw migrate --help` for all options, or use the `openclaw-migration
 
 ---
 
+## LeadGen Agent Integration
+
+Hermes can read Dukick lead discovery exports from the local `lead-gen-agent` repo without running any live discovery itself.
+
+Default read-only repo path:
+
+```text
+~/CongThang/lead-gen-agent
+```
+
+What Hermes reads:
+
+* `data/output/hermes_leads.json`
+* `data/output/hermes_leads.csv`
+* `data/output/demo_leads.md`
+* `data/output/report.json`
+
+Safe defaults:
+
+* `LEADGEN_AGENT_MODE=read_only`
+* `LEADGEN_AGENT_ALLOW_DRY_RUN=false`
+* `LEADGEN_AGENT_ALLOW_LIVE=false`
+
+Read the integration guide:
+
+* [docs/LEADGEN_AGENT_INTEGRATION.md](docs/LEADGEN_AGENT_INTEGRATION.md)
+
+Quick read-only summary command:
+
+```bash
+hermes leadgen show
+```
+
+Hermes never auto-runs Apify or OpenAI from this integration. If you want to refresh leads, run `leadgen-agent` manually in its own repo first and then have Hermes read the exported files.
+
+---
+
 ## Contributing
 
 We welcome contributions! See the [Contributing Guide](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing) for development setup, code style, and PR process.

@@ -1,0 +1,34 @@
+{
+  "leads": [
+    {
+      "lead_id": "apify-123",
+      "company_name": "The Gym Group",
+      "website": "https://www.thegymgroup.com/",
+      "domain": "thegymgroup.com",
+      "page_url": "https://www.facebook.com/TheGymGroup",
+      "source": "apify",
+      "source_id": "123",
+      "source_url": "https://www.facebook.com/ads/library/?active_status=active&country=VN&q=gym",
+      "ad_title": "Join The Gym Group",
+      "ad_text_snippet": "Sign up for membership and start today.",
+      "cta_text": "Sign up",
+      "page_category": "Gym",
+      "platforms": ["Facebook", "Instagram", "Threads"],
+      "is_active": true,
+      "icp_profile": "dukick_tvc",
+      "icp_fit_score": 0.74,
+      "creative_opportunity_score": 0.82,
+      "creative_opportunity_reason": "Active gym brand ad with landing page and static image creative; likely candidate for video testimonial or transformation story.",
+      "market_fit_score": 0.52,
+      "market_fit_decision": "global_or_unknown",
+      "market_fit_reason": "No clear Vietnam-local evidence in domain or copy.",
+      "relevance_score": 0.69,
+      "relevance_decision": "review",
+      "qualification": "review",
+      "evidence_summary": "CTA Sign up; active Facebook/Instagram/Threads ads; landing page available.",
+      "suggested_video_angle": "Member transformation + testimonial signup video",
+      "why_dukick_should_care": "Fitness brands often benefit from before-after, testimonial, and offer-led TVC creative.",
+      "raw_artifact_reference": "data/state/apify_raw/ad-123.json"
+    }
+  ]
+}

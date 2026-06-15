@@ -1,0 +1,28 @@
+{
+  "run_id": "20260613-180000-dukick",
+  "started_at": "2026-06-13T18:00:00+07:00",
+  "completed_at": "2026-06-13T18:01:30+07:00",
+  "status": "completed",
+  "source": "apify",
+  "profile_name": "dukick_tvc",
+  "target_country": "VN",
+  "lead_query": "gym",
+  "lead_count": 1,
+  "relevance_keep_rows": 0,
+  "relevance_review_rows": 1,
+  "relevance_reject_rows": 0,
+  "hermes_export_rows": 1,
+  "discovery_only": true,
+  "estimated_cost_usd": 0.02,
+  "safety": {
+    "send_enabled": false,
+    "apify_enabled": true,
+    "openai_enabled": false
+  },
+  "artifact_paths": {
+    "hermes_json": "data/output/hermes_leads.json",
+    "hermes_csv": "data/output/hermes_leads.csv",
+    "demo_summary": "data/output/demo_leads.md",
+    "report": "data/output/report.json"
+  }
+}

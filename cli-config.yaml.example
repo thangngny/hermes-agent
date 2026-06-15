@@ -1237,3 +1237,17 @@ updates:
 #   # default — works on Fly.io out of the box).
 #   #
 #   #   public_url: "https://example.com/hermes"
+
+
+# =============================================================================
+# Dukick LeadGen Agent integration (read-only)
+# =============================================================================
+# leadgen_agent:
+#   repo: ~/CongThang/lead-gen-agent
+#   hermes_json: data/output/hermes_leads.json
+#   hermes_csv: data/output/hermes_leads.csv
+#   demo_summary: data/output/demo_leads.md
+#   report: data/output/report.json
+#   mode: read_only
+#   allow_dry_run: false
+#   allow_live: false

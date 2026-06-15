@@ -291,6 +291,7 @@ from hermes_cli.subcommands.dashboard import build_dashboard_parser
 from hermes_cli.subcommands.gui import build_gui_parser
 from hermes_cli.subcommands.logs import build_logs_parser
 from hermes_cli.subcommands.prompt_size import build_prompt_size_parser
+from hermes_cli.subcommands.leadgen import build_leadgen_parser
 from hermes_cli.subcommands.memory import build_memory_parser
 from hermes_cli.subcommands.acp import build_acp_parser
 from hermes_cli.subcommands.tools import build_tools_parser
@@ -10694,6 +10695,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         # top-level --help is an acceptable trade-off for skipping an
         # expensive eager import of every bundled plugin module.
         "help",
+        "leadgen",
     }
 )
 
@@ -11155,6 +11157,12 @@ def cmd_claw(args):
     from hermes_cli.claw import claw_command
 
     claw_command(args)
+
+
+def cmd_leadgen(args):
+    from hermes_cli.leadgen_cmd import cmd_leadgen as _impl
+
+    _impl(args)
 
 
 def main():
@@ -12081,6 +12089,11 @@ def main():
     # prompt-size command  (parser built in hermes_cli/subcommands/prompt_size.py)
     # =========================================================================
     build_prompt_size_parser(subparsers, cmd_prompt_size=cmd_prompt_size)
+
+    # =========================================================================
+    # leadgen command  (parser built in hermes_cli/subcommands/leadgen.py)
+    # =========================================================================
+    build_leadgen_parser(subparsers, cmd_leadgen=cmd_leadgen)
 
     # =========================================================================
     # Parse and execute
