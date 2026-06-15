@@ -141,7 +141,8 @@ def test_empty_and_invalid_exports_are_safe(tmp_path, filename, contents, expect
     if contents == "[]":
         assert result.ok is True
         assert result.lead_count == 0
-        assert summary == expected
+        assert "Chưa có lead đủ điều kiện export." in summary
+        assert "Exported leads: 0" in summary
     else:
         assert result.ok is False
         assert any(expected in error for error in result.errors)
@@ -167,7 +168,7 @@ def test_summary_includes_vietnamese_fields_and_excludes_raw_payload(tmp_path):
     assert "https://www.thegymgroup.com/" in text
     assert "Gym" in text
     assert "Market fit: global_or_unknown" in text
-    assert "Trạng thái: review" in text
+    assert "Trạng thái: Review" in text
     assert "Member transformation" in text
     assert "raw_payload" not in text
 
@@ -286,7 +287,15 @@ def test_preflight_uses_subprocess_with_dry_run_true(monkeypatch, tmp_path):
 
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs))
-        payload = {"apify": {"ok": True, "estimated_cost_usd": 0.02, "reasons": []}}
+        payload = {
+            "request": {"request_id": "20260615-req-1"},
+            "apify": {
+                "ok": True,
+                "estimated_cost_usd": 0.02,
+                "reasons": [],
+                "details": {"planned_queries": ["spa", "showroom nội thất"]},
+            },
+        }
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -294,6 +303,8 @@ def test_preflight_uses_subprocess_with_dry_run_true(monkeypatch, tmp_path):
 
     assert result.ok is True
     assert result.estimate_usd == 0.02
+    assert result.request_id == "20260615-req-1"
+    assert result.planned_queries == ("spa", "showroom nội thất")
     assert len(calls) == 2
     assert calls[0][0] == ["leadgen-agent", "smoke-plan", "--source", "apify"]
     assert calls[1][0] == ["leadgen-agent", "preflight", "--source", "apify"]
@@ -409,6 +420,44 @@ def test_sales_read_latest_still_uses_read_only_summary(tmp_path):
 
 def test_sales_search_routes_to_preflight_not_summary(monkeypatch, tmp_path):
     repo = _copy_fixture_repo(tmp_path)
+    settings = LeadGenAgentSettings(**{**_settings(repo).__dict__, "allow_live": True})
+
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps(
+                {
+                    "request": {"request_id": "20260615-req-3"},
+                    "apify": {
+                        "ok": True,
+                        "estimated_cost_usd": 0.02,
+                        "reasons": [],
+                        "details": {"planned_queries": ["spa", "showroom nội thất"]},
+                    },
+                }
+            ),
+            stderr="",
+        ),
+    )
+    text = route_sales_lead_request(
+        "tìm lead spa ở Việt Nam cho Dukick",
+        profile_name="sales",
+        config=settings,
+    )
+
+    assert "Em đã chuẩn bị tìm lead bằng Apify" in text
+    assert "* Ngành/query: spa" in text
+    assert "Dự kiến sẽ thử các query sau" in text
+    assert "showroom nội thất" in text
+    assert "Mã plan/run dự kiến: 20260615-req-3" in text
+    assert "Anh xác nhận `chạy live 1 lead`" in text
+
+
+def test_preflight_falls_back_when_planned_queries_missing(monkeypatch, tmp_path):
+    repo = _copy_fixture_repo(tmp_path)
+    settings = LeadGenAgentSettings(**{**_settings(repo).__dict__, "allow_live": True})
 
     monkeypatch.setattr(
         "subprocess.run",
@@ -422,12 +471,13 @@ def test_sales_search_routes_to_preflight_not_summary(monkeypatch, tmp_path):
     text = route_sales_lead_request(
         "tìm lead spa ở Việt Nam cho Dukick",
         profile_name="sales",
-        config=_settings(repo),
+        config=settings,
     )
 
+    assert text is not None
     assert "Em đã chuẩn bị tìm lead bằng Apify" in text
-    assert "* Ngành/query: spa" in text
-    assert "chưa chạy live" in text
+    assert "Dự kiến sẽ thử các query sau" not in text
+    assert "Anh xác nhận `chạy live 1 lead`" in text
 
 
 def test_sales_profile_missing_export_returns_safe_message_when_reading_latest(tmp_path):
@@ -960,13 +1010,24 @@ def test_cli_command_uses_adapter_and_parser(tmp_path, capsys):
 
 def test_cli_plan_command_uses_preflight_runner(monkeypatch, tmp_path, capsys):
     repo = _copy_fixture_repo(tmp_path)
+    monkeypatch.setenv("LEADGEN_AGENT_ALLOW_LIVE", "true")
     monkeypatch.setattr(
         subprocess,
         "run",
         lambda cmd, **kwargs: subprocess.CompletedProcess(
             cmd,
             0,
-            stdout=json.dumps({"apify": {"ok": True, "estimated_cost_usd": 0.02, "reasons": []}}),
+            stdout=json.dumps(
+                {
+                    "request": {"request_id": "20260615-req-4"},
+                    "apify": {
+                        "ok": True,
+                        "estimated_cost_usd": 0.02,
+                        "reasons": [],
+                        "details": {"planned_queries": ["spa", "showroom nội thất"]},
+                    },
+                }
+            ),
             stderr="",
         ),
     )
@@ -983,5 +1044,247 @@ def test_cli_plan_command_uses_preflight_runner(monkeypatch, tmp_path, capsys):
     )
     cmd_leadgen(args)
     out = capsys.readouterr().out
-    assert "query=spa" in out
-    assert "estimate_usd=0.02" in out
+    assert "Ngành/query: spa" in out
+    assert "Estimate: khoảng $0.02" in out
+    assert "Dự kiến sẽ thử các query sau" in out
+    assert "showroom nội thất" in out
+    assert "Mã plan/run dự kiến: 20260615-req-4" in out
+    assert "showroom nội thất" in out
+    assert "Anh xác nhận `chạy live 1 lead`" in out
+
+
+def test_preflight_reply_includes_planned_queries_and_confirmation(monkeypatch, tmp_path):
+    repo = _copy_fixture_repo(tmp_path)
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps(
+                {
+                    "request": {"request_id": "20260615-req-2"},
+                    "apify": {
+                        "ok": True,
+                        "estimated_cost_usd": 0.28,
+                        "reasons": [],
+                        "details": {"planned_queries": ["chung cư mở bán", "booking căn hộ"]},
+                    },
+                }
+            ),
+            stderr="",
+        ),
+    )
+
+    text = route_sales_lead_request(
+        "Tìm lead chung cư mở bán ở Việt Nam cho Dukick, tối đa 3 lead",
+        profile_name="sales",
+        config=LeadGenAgentSettings(**{**_settings(repo).__dict__, "allow_live": True}),
+    )
+
+    assert text is not None
+    assert "Em đã chuẩn bị tìm lead bằng Apify" in text
+    assert "Ngành/query: chung cư mở bán" in text
+    assert "Dự kiến sẽ thử các query sau" in text
+    assert "booking căn hộ" in text
+    assert "Mã plan/run dự kiến: 20260615-req-2" in text
+    assert "Anh xác nhận `chạy live 3 lead`" in text
+
+
+def test_post_run_summary_shows_review_lead_evidence_and_run_id(tmp_path):
+    repo = tmp_path / "lead-gen-agent"
+    (repo / "data" / "output").mkdir(parents=True)
+    (repo / "data" / "output" / "hermes_leads.json").write_text(
+        json.dumps(
+            [
+                {
+                    "lead_id": "lead-1",
+                    "company_name": "Eurowindow Light City",
+                    "website": "https://eurowindowlightcity.vn/",
+                    "domain": "eurowindowlightcity.vn",
+                    "page_url": "https://www.facebook.com/eurowindowlightcity",
+                    "source": "apify",
+                    "source_id": "456",
+                    "source_url": "https://www.facebook.com/ads/library/?q=booking%20c%C4%83n%20h%E1%BB%99",
+                    "ad_title": "Eurowindow Light City - Booking căn hộ",
+                    "ad_text_snippet": "Đăng ký tư vấn và tham quan nhà mẫu.",
+                    "cta_text": "Learn more",
+                    "page_category": "Real Estate",
+                    "platforms": ["Facebook"],
+                    "is_active": True,
+                    "query_used": "booking căn hộ",
+                    "matched_query": "booking căn hộ",
+                    "query_mode": "known_industry",
+                    "industry_match_decision": "weak_match",
+                    "industry_match_score": 40,
+                    "industry_match_reason": "Weak match for requested_query='chung cư mở bán'",
+                    "query_match_decision": "match",
+                    "query_match_score": 69,
+                    "query_match_reason": "strong textual evidence for query 'chung cư mở bán'",
+                    "query_match_evidence": ["booking căn hộ", "tư vấn", "dự án"],
+                    "market_fit_decision": "local",
+                    "market_fit_reason": "Vietnam-local evidence found.",
+                    "relevance_score": 60,
+                    "relevance_decision": "review",
+                    "qualification": "review",
+                    "relevance_subreasons": ["weak_industry_score"],
+                    "relevance_evidence": ["dự án", "booking", "tư vấn"],
+                    "evidence_summary": "company=Eurowindow Light City | landing_page=eurowindowlightcity.vn | category=Real Estate | cta=Learn more",
+                    "suggested_video_angle": "Use walkthrough footage and project narration.",
+                    "why_dukick_should_care": "Real-estate launch campaigns benefit from video walkthroughs.",
+                    "raw_artifact_reference": "data/state/apify_raw/ad-456.json",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (repo / "data" / "output" / "demo_leads.md").write_text("# Dukick Lead Discovery Summary\n", encoding="utf-8")
+    (repo / "data" / "output" / "report.json").write_text(
+        json.dumps(
+            {
+                "run_id": "20260615081820-450b4c43",
+                "status": "completed",
+                "source": "apify",
+                "profile_name": "dukick_tvc",
+                "target_country": "VN",
+                "lead_query": "chung cư mở bán",
+                "requested_query": "chung cư mở bán",
+                "query_mode": "known_industry",
+                "counts": {
+                    "raw_total_rows": 8,
+                    "rejected_rows": 5,
+                    "relevance_keep_rows": 0,
+                    "relevance_review_rows": 1,
+                    "relevance_reject_rows": 4,
+                    "hermes_export_rows": 1,
+                },
+                "top_reject_reasons": {"irrelevant_icp": 4, "requested_query_mismatch": 1},
+                "top_reject_subreasons": {"no_real_estate_evidence": 4, "query_mismatch": 1},
+                "example_rejected_candidates": [
+                    {
+                        "company_name": "Ngọc Anh 12",
+                        "reject_reason": "irrelevant_icp",
+                        "query_used": "mở bán căn hộ",
+                        "matched_query": "mở bán căn hộ",
+                        "relevance_subreasons": ["no_real_estate_evidence", "no_commercial_cta"],
+                        "relevance_evidence": ["page_category=Beauty Supplies"],
+                    }
+                ],
+                "artifact_paths": {"run_output_dir": "data/output/runs/20260615081820-450b4c43"},
+                "search_plan": {
+                    "search_queries": [
+                        "chung cư mở bán",
+                        "mở bán căn hộ",
+                        "dự án căn hộ",
+                        "đăng ký tư vấn căn hộ",
+                        "tham quan nhà mẫu",
+                        "nhận bảng giá căn hộ",
+                        "booking căn hộ",
+                    ]
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    text = route_sales_lead_request(
+        "đọc lead mới nhất",
+        profile_name="sales",
+        config=_settings(repo),
+    )
+
+    assert text is not None
+    assert "Run ID: 20260615081820-450b4c43" in text
+    assert "Eurowindow Light City" in text
+    assert "Trạng thái: Review" in text
+    assert "Query tìm thấy: query_used=booking căn hộ" in text
+    assert "matched_query=booking căn hộ" in text
+    assert "Tín hiệu phù hợp: dự án, booking, tư vấn" in text
+    assert "Lý do chưa xếp Keep" in text
+    assert "Có snapshot audit cho run này trong data/output/runs/20260615081820-450b4c43" in text
+
+
+def test_empty_result_diagnostics_surface_reject_reasons_and_examples(tmp_path):
+    repo = tmp_path / "lead-gen-agent"
+    (repo / "data" / "output").mkdir(parents=True)
+    (repo / "data" / "output" / "hermes_leads.json").write_text("[]", encoding="utf-8")
+    (repo / "data" / "output" / "demo_leads.md").write_text("# Dukick Lead Discovery Summary\n", encoding="utf-8")
+    (repo / "data" / "output" / "report.json").write_text(
+        json.dumps(
+            {
+                "run_id": "20260615090000-abcdef12",
+                "status": "completed",
+                "source": "apify",
+                "profile_name": "dukick_tvc",
+                "target_country": "VN",
+                "lead_query": "chung cư mở bán",
+                "requested_query": "chung cư mở bán",
+                "query_mode": "known_industry",
+                "counts": {
+                    "raw_total_rows": 8,
+                    "rejected_rows": 5,
+                    "relevance_keep_rows": 0,
+                    "relevance_review_rows": 0,
+                    "relevance_reject_rows": 4,
+                    "hermes_export_rows": 0,
+                },
+                "top_reject_reasons": {"irrelevant_icp": 4, "requested_query_mismatch": 1},
+                "top_reject_subreasons": {
+                    "no_real_estate_evidence": 4,
+                    "no_commercial_cta": 3,
+                    "query_mismatch": 1,
+                },
+                "example_rejected_candidates": [
+                    {
+                        "company_name": "Ngọc Anh 12",
+                        "reject_reason": "irrelevant_icp",
+                        "query_used": "mở bán căn hộ",
+                        "relevance_subreasons": ["no_real_estate_evidence", "no_commercial_cta"],
+                        "relevance_evidence": ["page_category=Beauty Supplies"],
+                    }
+                ],
+                "search_plan": {
+                    "search_queries": [
+                        "chung cư mở bán",
+                        "mở bán căn hộ",
+                        "dự án căn hộ",
+                    ]
+                },
+                "artifact_paths": {"run_output_dir": "data/output/runs/20260615090000-abcdef12"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    text = route_sales_lead_request(
+        "đọc lead mới nhất",
+        profile_name="sales",
+        config=_settings(repo),
+    )
+
+    assert text is not None
+    assert "Chưa có lead đủ điều kiện export." in text
+    assert "Raw candidates: 8" in text
+    assert "Top reject reasons: irrelevant_icp=4, requested_query_mismatch=1" in text
+    assert "Top reject subreasons:" in text
+    assert "Ngọc Anh 12" in text
+    assert "Suggested next queries:" in text
+
+
+def test_backward_compatibility_missing_new_fields_still_summarizes(tmp_path):
+    repo = tmp_path / "lead-gen-agent"
+    (repo / "data" / "output").mkdir(parents=True)
+    (repo / "data" / "output" / "hermes_leads.json").write_text(
+        json.dumps([{"company_name": "Legacy Lead", "qualification": "review"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (repo / "data" / "output" / "demo_leads.md").write_text("# Dukick Lead Discovery Summary\n", encoding="utf-8")
+
+    text = LeadGenAgentAdapter(_settings(repo)).summarize_for_user()
+
+    assert "Legacy Lead" in text
+    assert "Trạng thái: Review" in text

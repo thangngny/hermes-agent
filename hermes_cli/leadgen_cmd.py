@@ -45,18 +45,7 @@ def cmd_leadgen(args) -> None:  # noqa: ANN001
             capped=requested > max_results,
         )
         result = runner.preflight_search(request)
-        print(
-            "\n".join(
-                [
-                    f"query={result.request.query}",
-                    f"country={result.request.country}",
-                    f"max_results={result.request.max_results}",
-                    f"estimate_usd={result.estimate_usd if result.estimate_usd is not None else 'unknown'}",
-                    f"ok={result.ok}",
-                    result.command_preview,
-                ]
-            )
-        )
+        print(runner.format_preflight_reply(result))
         return
     if command == "run-confirmed":
         if not getattr(args, "i_understand_this_may_cost_money", False):

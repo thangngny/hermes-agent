@@ -155,8 +155,23 @@ class LeadGenLead:
     page_category: str = ""
     platforms: tuple[str, ...] = ()
     is_active: bool | None = None
+    requested_query: str = ""
+    requested_industry: str = ""
+    canonical_industry: str = ""
+    query_mode: str = ""
+    search_plan_id: str = ""
+    query_used: str = ""
+    matched_query: str = ""
+    query_match_score: float | None = None
+    query_match_decision: str = ""
+    query_match_reason: str = ""
+    query_match_evidence: tuple[str, ...] = ()
+    industry_match_score: float | None = None
+    industry_match_decision: str = ""
+    industry_match_reason: str = ""
     icp_profile: str = ""
     icp_fit_score: float | None = None
+    icp_fit_reason: str = ""
     creative_opportunity_score: float | None = None
     creative_opportunity_reason: str = ""
     market_fit_score: float | None = None
@@ -165,6 +180,11 @@ class LeadGenLead:
     relevance_score: float | None = None
     relevance_decision: str = ""
     qualification: str = ""
+    relevance_subreasons: tuple[str, ...] = ()
+    relevance_evidence: tuple[str, ...] = ()
+    reject_reason: str = ""
+    reject_subreasons: tuple[str, ...] = ()
+    reject_evidence: tuple[str, ...] = ()
     evidence_summary: str = ""
     suggested_video_angle: str = ""
     why_dukick_should_care: str = ""
@@ -346,31 +366,7 @@ class LeadGenAgentAdapter:
             if any("Chưa có file lead export" in error for error in result.errors):
                 return "Chưa có file lead export. Cần chạy lead-gen-agent trước."
             return "\n".join(result.errors)
-
-        usable_leads = [
-            lead for lead in result.leads
-            if (lead.qualification or lead.relevance_decision or "").lower() in {"keep", "review"}
-        ]
-        if not usable_leads:
-            return "Hiện chưa có lead keep/review trong export."
-
-        lead_lines = []
-        selected = usable_leads[: max(limit, 1)]
-        for idx, lead in enumerate(selected, start=1):
-            lead_lines.extend(self._format_lead_for_vi(lead, idx))
-            lead_lines.append("")
-
-        header = [
-            f"Đã đọc kết quả từ lead-gen-agent tại {result.source_repo}.",
-            f"Hiện có {len(usable_leads)} lead phù hợp để review cho Dukick Studio.",
-        ]
-        if result.report_run_id:
-            header.append(f"Run ID: {result.report_run_id}")
-        if result.report_completed_at:
-            header.append(f"Hoàn tất lúc: {result.report_completed_at}")
-        if result.profile_name:
-            header.append(f"ICP profile: {result.profile_name}")
-        return "\n".join(header + [""] + lead_lines).strip()
+        return self._format_export_summary(result, limit=limit, language=language)
 
     def respond_to_request(self, user_text: str, language: str = "vi") -> str:
         if looks_like_live_request(user_text):
@@ -417,8 +413,23 @@ class LeadGenAgentAdapter:
         page_category = self._coerce_text(entry.get("page_category"))
         platforms = tuple(self._coerce_list(entry.get("platforms")))
         is_active = self._coerce_bool(entry.get("is_active"))
+        requested_query = self._coerce_text(entry.get("requested_query"))
+        requested_industry = self._coerce_text(entry.get("requested_industry"))
+        canonical_industry = self._coerce_text(entry.get("canonical_industry"))
+        query_mode = self._coerce_text(entry.get("query_mode"))
+        search_plan_id = self._coerce_text(entry.get("search_plan_id"))
+        query_used = self._coerce_text(entry.get("query_used"))
+        matched_query = self._coerce_text(entry.get("matched_query"))
+        query_match_score = self._coerce_float(entry.get("query_match_score"))
+        query_match_decision = self._coerce_text(entry.get("query_match_decision"))
+        query_match_reason = self._coerce_text(entry.get("query_match_reason"))
+        query_match_evidence = tuple(self._coerce_list(entry.get("query_match_evidence")))
+        industry_match_score = self._coerce_float(entry.get("industry_match_score"))
+        industry_match_decision = self._coerce_text(entry.get("industry_match_decision"))
+        industry_match_reason = self._coerce_text(entry.get("industry_match_reason"))
         icp_profile = self._coerce_text(entry.get("icp_profile"))
         icp_fit_score = self._coerce_float(entry.get("icp_fit_score"))
+        icp_fit_reason = self._coerce_text(entry.get("icp_fit_reason"))
         creative_opportunity_score = self._coerce_float(entry.get("creative_opportunity_score"))
         creative_opportunity_reason = self._coerce_text(entry.get("creative_opportunity_reason"))
         market_fit_score = self._coerce_float(entry.get("market_fit_score"))
@@ -427,6 +438,11 @@ class LeadGenAgentAdapter:
         relevance_score = self._coerce_float(entry.get("relevance_score"))
         relevance_decision = self._coerce_text(entry.get("relevance_decision"))
         qualification = self._coerce_text(entry.get("qualification"))
+        relevance_subreasons = tuple(self._coerce_list(entry.get("relevance_subreasons")))
+        relevance_evidence = tuple(self._coerce_list(entry.get("relevance_evidence")))
+        reject_reason = self._coerce_text(entry.get("reject_reason"))
+        reject_subreasons = tuple(self._coerce_list(entry.get("reject_subreasons")))
+        reject_evidence = tuple(self._coerce_list(entry.get("reject_evidence")))
         evidence_summary = self._short_text(entry.get("evidence_summary"))
         suggested_video_angle = self._coerce_text(entry.get("suggested_video_angle"))
         why_dukick_should_care = self._coerce_text(entry.get("why_dukick_should_care"))
@@ -447,8 +463,23 @@ class LeadGenAgentAdapter:
             page_category=page_category,
             platforms=platforms,
             is_active=is_active,
+            requested_query=requested_query,
+            requested_industry=requested_industry,
+            canonical_industry=canonical_industry,
+            query_mode=query_mode,
+            search_plan_id=search_plan_id,
+            query_used=query_used,
+            matched_query=matched_query,
+            query_match_score=query_match_score,
+            query_match_decision=query_match_decision,
+            query_match_reason=query_match_reason,
+            query_match_evidence=query_match_evidence,
+            industry_match_score=industry_match_score,
+            industry_match_decision=industry_match_decision,
+            industry_match_reason=industry_match_reason,
             icp_profile=icp_profile,
             icp_fit_score=icp_fit_score,
+            icp_fit_reason=icp_fit_reason,
             creative_opportunity_score=creative_opportunity_score,
             creative_opportunity_reason=creative_opportunity_reason,
             market_fit_score=market_fit_score,
@@ -457,20 +488,171 @@ class LeadGenAgentAdapter:
             relevance_score=relevance_score,
             relevance_decision=relevance_decision,
             qualification=qualification,
+            relevance_subreasons=relevance_subreasons,
+            relevance_evidence=relevance_evidence,
+            reject_reason=reject_reason,
+            reject_subreasons=reject_subreasons,
+            reject_evidence=reject_evidence,
             evidence_summary=evidence_summary,
             suggested_video_angle=suggested_video_angle,
             why_dukick_should_care=why_dukick_should_care,
             raw_artifact_reference=raw_artifact_reference,
         )
 
+    def _format_export_summary(self, result: LeadGenAgentExportResult, *, limit: int, language: str) -> str:
+        report = result.report if isinstance(result.report, Mapping) else {}
+        counts = self._report_counts(report)
+        usable_leads = [
+            lead for lead in result.leads
+            if (lead.qualification or lead.relevance_decision or "").lower() in {"keep", "review"}
+        ]
+        selected = usable_leads[: max(limit, 1)]
+
+        header = [
+            f"Đã đọc kết quả từ lead-gen-agent tại {result.source_repo}.",
+        ]
+        fallback_lead = result.leads[0] if result.leads else None
+        run_id = result.report_run_id or (fallback_lead.search_plan_id if fallback_lead else "")
+        if run_id:
+            header.append(f"Run ID: {run_id}")
+        if result.report_completed_at:
+            header.append(f"Hoàn tất lúc: {result.report_completed_at}")
+        profile_name = result.profile_name or (fallback_lead.icp_profile if fallback_lead else "")
+        if profile_name:
+            header.append(f"ICP profile: {profile_name}")
+        if result.target_country:
+            header.append(f"Quốc gia: {result.target_country}")
+        query = self._report_first_str(report, "requested_query", "lead_query") or result.lead_query
+        if not query and fallback_lead is not None:
+            query = fallback_lead.requested_query or fallback_lead.query_used or fallback_lead.matched_query
+        if query:
+            header.append(f"Query gốc: {query}")
+        query_mode = self._report_first_str(report, "query_mode") or (fallback_lead.query_mode if fallback_lead else None)
+        if query_mode:
+            header.append(f"Query mode: {query_mode}")
+        tried_queries = self._report_planned_queries(report)
+        if tried_queries:
+            header.append(f"Đã thử {len(tried_queries)} query: {', '.join(tried_queries)}")
+        audit_path = self._report_first_str(report, "artifact_paths", "run_output_dir") or self._report_first_str(report, "run_artifacts", "run_output_dir")
+        if audit_path:
+            header.append(f"Có snapshot audit cho run này trong {audit_path}.")
+
+        if counts.get("raw_total_rows") is not None:
+            header.append(f"Raw candidates: {counts['raw_total_rows']}")
+        exported_rows = counts.get("hermes_export_rows")
+        header.append(f"Exported leads: {result.lead_count if exported_rows is None else exported_rows}")
+
+        if not usable_leads:
+            header.append("Chưa có lead đủ điều kiện export.")
+            reject_lines = self._format_reject_diagnostics(report)
+            if reject_lines:
+                header.append("")
+                header.extend(reject_lines)
+            suggestion_lines = self._format_next_query_suggestions(tried_queries, report)
+            if suggestion_lines:
+                header.append("")
+                header.extend(suggestion_lines)
+            return "\n".join(header).strip()
+
+        header.append(f"Kết quả: tìm được {len(usable_leads)} lead keep/review")
+        if counts.get("relevance_keep_rows") is not None or counts.get("relevance_review_rows") is not None:
+            header.append(
+                "Phân loại: "
+                f"keep={counts.get('relevance_keep_rows', 0)}, "
+                f"review={counts.get('relevance_review_rows', 0)}, "
+                f"reject={counts.get('relevance_reject_rows', 0)}"
+            )
+        reject_lines = self._format_reject_diagnostics(report)
+        if reject_lines and (not usable_leads or counts.get("rejected_rows", 0) or counts.get("relevance_reject_rows", 0)):
+            header.append("")
+            header.extend(reject_lines[:6])
+
+        lead_lines: list[str] = []
+        for idx, lead in enumerate(selected, start=1):
+            lead_lines.extend(self._format_lead_for_vi(lead, idx))
+            lead_lines.append("")
+
+        return "\n".join(header + [""] + lead_lines).strip()
+
+    def _format_reject_diagnostics(self, report: Mapping[str, Any]) -> list[str]:
+        lines: list[str] = []
+        top_reasons = self._report_top_items(report, "top_reject_reasons")
+        top_subreasons = self._report_top_items(report, "top_reject_subreasons")
+        examples = self._report_examples(report)
+        if top_reasons:
+            lines.append(f"Top reject reasons: {', '.join(top_reasons)}")
+        if top_subreasons:
+            lines.append(f"Top reject subreasons: {', '.join(top_subreasons)}")
+        if examples:
+            lines.append("Ví dụ bị loại:")
+            for example in examples[:2]:
+                label = example.get("company_name") or "Unknown"
+                reason = example.get("reject_reason") or example.get("relevance_decision") or "unknown"
+                details = []
+                for key in ("relevance_subreasons", "reject_subreasons", "relevance_evidence", "reject_evidence"):
+                    value = example.get(key)
+                    if isinstance(value, list) and value:
+                        details.append(f"{key}={', '.join(str(item) for item in value[:4])}")
+                query_used = example.get("query_used") or example.get("matched_query")
+                if query_used:
+                    details.append(f"query={query_used}")
+                line = f"- {label} — {reason}"
+                if details:
+                    line += f" ({'; '.join(details)})"
+                lines.append(line)
+        return lines
+
+    def _format_next_query_suggestions(self, tried_queries: list[str], report: Mapping[str, Any]) -> list[str]:
+        suggestions = self._report_suggestions(report)
+        lines: list[str] = []
+        if suggestions:
+            lines.append("Suggested next queries:")
+            lines.extend(f"- {item}" for item in suggestions[:5])
+            return lines
+        if tried_queries:
+            lines.append("Suggested next queries:")
+            lines.extend(f"- {item}" for item in tried_queries[:3])
+        return lines
+
     def _format_lead_for_vi(self, lead: LeadGenLead, idx: int) -> list[str]:
         lines = [f"{idx}. {lead.company_name}"]
         if lead.website:
             lines.append(f"* Website: {lead.website}")
+        if lead.page_url and lead.page_url != lead.website:
+            lines.append(f"* Nguồn/landing: {lead.page_url}")
         if lead.domain:
             lines.append(f"* Domain: {lead.domain}")
         if lead.page_category:
             lines.append(f"* Ngành: {lead.page_category}")
+        status = (lead.qualification or lead.relevance_decision or "").strip().lower()
+        if status:
+            lines.append(f"* Trạng thái: {status.capitalize()}")
+        if lead.query_used or lead.matched_query:
+            query_bits = []
+            if lead.query_used:
+                query_bits.append(f"query_used={lead.query_used}")
+            if lead.matched_query:
+                query_bits.append(f"matched_query={lead.matched_query}")
+            if query_bits:
+                lines.append(f"* Query tìm thấy: {'; '.join(query_bits)}")
+        if lead.query_mode:
+            lines.append(f"* Query mode: {lead.query_mode}")
+        if lead.industry_match_decision or lead.query_match_decision:
+            decision_bits = []
+            if lead.industry_match_decision:
+                decision_bits.append(f"industry={lead.industry_match_decision}")
+            if lead.query_match_decision:
+                decision_bits.append(f"query={lead.query_match_decision}")
+            lines.append(f"* Khớp: {'; '.join(decision_bits)}")
+        score_bits = []
+        if lead.query_match_score is not None:
+            score_bits.append(f"query={self._fmt_score(lead.query_match_score)}")
+        if lead.industry_match_score is not None:
+            score_bits.append(f"ngành={self._fmt_score(lead.industry_match_score)}")
+        if lead.relevance_score is not None:
+            score_bits.append(f"liên quan={self._fmt_score(lead.relevance_score)}")
+        if score_bits:
+            lines.append(f"* Điểm: {'; '.join(score_bits)}")
         if lead.cta_text or lead.platforms:
             ad_parts = []
             if lead.cta_text:
@@ -478,6 +660,11 @@ class LeadGenAgentAdapter:
             if lead.platforms:
                 ad_parts.append(f"đang chạy trên {', '.join(lead.platforms)}")
             lines.append(f"* Tín hiệu ads: {'; '.join(ad_parts)}")
+        evidence_bits = list(lead.relevance_evidence or ())
+        if not evidence_bits and lead.evidence_summary:
+            evidence_bits = [lead.evidence_summary]
+        if evidence_bits:
+            lines.append(f"* Tín hiệu phù hợp: {', '.join(evidence_bits[:5])}")
         if lead.creative_opportunity_reason:
             lines.append(f"* Cơ hội TVC: {lead.creative_opportunity_reason}")
         if lead.market_fit_decision:
@@ -485,8 +672,11 @@ class LeadGenAgentAdapter:
             if lead.market_fit_reason:
                 market = f"{market} — {lead.market_fit_reason}"
             lines.append(f"* Market fit: {market}")
-        if lead.qualification:
-            lines.append(f"* Trạng thái: {lead.qualification}")
+        if status == "review":
+            lines.append(f"* Lý do để review: {self._review_reason(lead)}")
+            lines.append(f"* Lý do chưa xếp Keep: {self._keep_gap_reason(lead)}")
+        elif status == "keep":
+            lines.append(f"* Lý do để Keep: {self._keep_reason(lead)}")
         if lead.suggested_video_angle:
             lines.append(f"* Gợi ý cho Dukick: {lead.suggested_video_angle}")
         if lead.why_dukick_should_care:
@@ -494,6 +684,142 @@ class LeadGenAgentAdapter:
         if lead.evidence_summary:
             lines.append(f"* Bằng chứng: {lead.evidence_summary}")
         return lines
+
+    def _fmt_score(self, value: float | None) -> str:
+        if value is None:
+            return "unknown"
+        if 0 <= value <= 1:
+            return str(int(round(value * 100)))
+        if float(value).is_integer():
+            return str(int(value))
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+
+    def _keep_gap_reason(self, lead: LeadGenLead) -> str:
+        parts: list[str] = []
+        if lead.industry_match_decision and lead.industry_match_decision not in {"match", "keep"}:
+            parts.append(f"industry={lead.industry_match_decision}")
+        if lead.query_match_decision and lead.query_match_decision not in {"match", "keep"}:
+            parts.append(f"query={lead.query_match_decision}")
+        if lead.relevance_score is not None and lead.relevance_score < 70:
+            parts.append(f"điểm liên quan {self._fmt_score(lead.relevance_score)}/100")
+        if lead.industry_match_score is not None and lead.industry_match_score < 70:
+            parts.append(f"điểm khớp ngành {self._fmt_score(lead.industry_match_score)}/100")
+        if lead.query_match_score is not None and lead.query_match_score < 70:
+            parts.append(f"điểm khớp query {self._fmt_score(lead.query_match_score)}/100")
+        if not parts:
+            return "chưa đủ mạnh để xếp Keep"
+        return "; ".join(parts)
+
+    def _keep_reason(self, lead: LeadGenLead) -> str:
+        parts: list[str] = []
+        if lead.query_match_evidence:
+            parts.append(", ".join(lead.query_match_evidence[:3]))
+        if lead.relevance_evidence:
+            parts.append(", ".join(lead.relevance_evidence[:3]))
+        if lead.market_fit_decision:
+            parts.append(f"market_fit={lead.market_fit_decision}")
+        return "; ".join(part for part in parts if part) or "đủ dữ liệu để giữ"
+
+    def _review_reason(self, lead: LeadGenLead) -> str:
+        parts: list[str] = []
+        if lead.query_used:
+            parts.append(f"query_used={lead.query_used}")
+        if lead.matched_query:
+            parts.append(f"matched_query={lead.matched_query}")
+        if lead.relevance_evidence:
+            parts.append(", ".join(lead.relevance_evidence[:4]))
+        if lead.query_match_evidence:
+            parts.append(", ".join(lead.query_match_evidence[:4]))
+        if lead.market_fit_reason:
+            parts.append(lead.market_fit_reason)
+        return "; ".join(part for part in parts if part) or "có tín hiệu dự án/căn hộ và nhu cầu booking/tư vấn"
+
+    def _report_counts(self, report: Mapping[str, Any]) -> dict[str, int | None]:
+        counts: dict[str, int | None] = {}
+        raw = report.get("counts")
+        if isinstance(raw, Mapping):
+            for key in (
+                "raw_total_rows",
+                "mapped_rows",
+                "clean_rows",
+                "rejected_rows",
+                "deduped_rows",
+                "relevance_keep_rows",
+                "relevance_review_rows",
+                "relevance_reject_rows",
+                "market_fit_local_rows",
+                "market_fit_targeted_rows",
+                "market_fit_global_rows",
+                "market_fit_mismatch_rows",
+                "hermes_export_rows",
+            ):
+                try:
+                    value = raw.get(key)
+                    counts[key] = int(value) if value not in (None, "") else None
+                except (TypeError, ValueError):
+                    counts[key] = None
+        else:
+            for key in ("raw_total_rows", "rejected_rows", "relevance_keep_rows", "relevance_review_rows", "relevance_reject_rows", "hermes_export_rows"):
+                counts[key] = None
+        return counts
+
+    def _report_first_str(self, report: Mapping[str, Any], *path: str) -> str | None:
+        value = self._report_path(report, *path)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if value not in (None, ""):
+            return str(value)
+        return None
+
+    def _report_path(self, report: Mapping[str, Any], *path: str) -> Any:
+        current: Any = report
+        for key in path:
+            if not isinstance(current, Mapping):
+                return None
+            current = current.get(key)
+        return current
+
+    def _report_top_items(self, report: Mapping[str, Any], key: str) -> list[str]:
+        raw = report.get(key)
+        if isinstance(raw, Mapping):
+            items: list[str] = []
+            for name, value in sorted(raw.items(), key=lambda kv: (-int(kv[1]) if str(kv[1]).isdigit() else 0, str(kv[0]))):
+                items.append(f"{name}={value}")
+            return items
+        return []
+
+    def _report_examples(self, report: Mapping[str, Any]) -> list[dict[str, Any]]:
+        raw = report.get("example_rejected_candidates")
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+        return []
+
+    def _report_planned_queries(self, report: Mapping[str, Any]) -> list[str]:
+        query_sources = [
+            self._report_path(report, "search_plan", "search_queries"),
+            self._report_path(report, "search_plan", "queries"),
+            self._report_path(report, "preflight", "discovery", "lead_queries"),
+            self._report_path(report, "preflight", "apify_plan", "details", "planned_queries"),
+            self._report_path(report, "preflight", "apify_plan", "input_preview", "planned_queries"),
+            self._report_path(report, "discovery", "lead_queries"),
+            self._report_path(report, "discovery", "queries"),
+            self._report_path(report, "artifact_paths", "planned_queries"),
+        ]
+        planned: list[str] = []
+        for value in query_sources:
+            if isinstance(value, list):
+                for item in value:
+                    text = self._coerce_text(item)
+                    if text and text not in planned:
+                        planned.append(text)
+        return planned
+
+    def _report_suggestions(self, report: Mapping[str, Any]) -> list[str]:
+        value = self._report_path(report, "notes")
+        if isinstance(value, str) and value.strip():
+            # Notes are often short and useful as fallback suggestions.
+            return [line.strip(" -*") for line in value.splitlines() if line.strip()]
+        return []
 
     def _coerce_text(self, value: Any) -> str:
         if value is None:

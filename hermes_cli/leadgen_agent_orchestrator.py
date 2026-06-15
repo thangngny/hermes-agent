@@ -95,6 +95,8 @@ class LeadGenPreflightResult:
     request: LeadGenSearchRequest
     estimate_usd: float | None
     ok: bool
+    request_id: str | None
+    planned_queries: tuple[str, ...]
     smoke_plan: dict[str, Any] | None
     preflight: dict[str, Any] | None
     reasons: list[str]
@@ -168,11 +170,16 @@ class LeadGenAgentRunner:
             request=request,
             estimate_usd=estimate,
             ok=ok,
+            request_id=_extract_request_id(preflight_json, smoke_json),
+            planned_queries=tuple(_extract_planned_queries(preflight_json, smoke_json)),
             smoke_plan=smoke_json if isinstance(smoke_json, dict) else None,
             preflight=preflight_json if isinstance(preflight_json, dict) else None,
             reasons=reasons,
             command_preview=preview,
         )
+
+    def format_preflight_reply(self, preflight: LeadGenPreflightResult) -> str:
+        return _build_preflight_reply(preflight, config=self.config)
 
     def run_live_search(self, request: LeadGenSearchRequest, *, confirmation: str) -> str:
         if not looks_like_confirmation_message(confirmation):
@@ -473,12 +480,18 @@ def _build_preflight_reply(preflight: LeadGenPreflightResult, *, config: LeadGen
             "* Chế độ: chưa chạy live",
         ]
     )
+    if preflight.request_id:
+        lines.append(f"* Mã plan/run dự kiến: {preflight.request_id}")
+    if preflight.planned_queries:
+        lines.append("* Dự kiến sẽ thử các query sau:")
+        lines.extend(f"  - {query}" for query in preflight.planned_queries)
     if preflight.reasons:
         lines.append(f"* Preflight: {'; '.join(preflight.reasons)}")
     if not config.allow_live:
         lines.append("* Live Apify hiện đang bị tắt trong Hermes. Nếu muốn bật, cần mở gate `LEADGEN_AGENT_ALLOW_LIVE=true` trước.")
     else:
-        lines.append(f"  Anh xác nhận `chạy live {req.max_results} lead` thì em mới chạy.")
+        lines.append(f"* Lệnh live sau khi xác nhận: {preflight.command_preview}")
+        lines.append(f"* Anh xác nhận `chạy live {req.max_results} lead` thì em mới chạy.")
     return "\n".join(lines)
 
 
@@ -620,6 +633,71 @@ def _extract_estimate_usd(*payloads: Mapping[str, Any] | None) -> float | None:
             except (TypeError, ValueError):
                 continue
     return None
+
+
+def _extract_request_id(*payloads: Mapping[str, Any] | None) -> str | None:
+    for payload in payloads:
+        if not isinstance(payload, Mapping):
+            continue
+        for path in (
+            ("request", "request_id"),
+            ("result", "request", "request_id"),
+            ("result", "run_id"),
+            ("run_id",),
+            ("report", "run_id"),
+            ("search_plan", "request_id"),
+            ("preflight", "discovery", "request_id"),
+            ("apify", "request_id"),
+            ("apify", "details", "request_id"),
+        ):
+            value = _mapping_path(payload, *path)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _extract_planned_queries(*payloads: Mapping[str, Any] | None) -> list[str]:
+    collected: list[str] = []
+    for payload in payloads:
+        if not isinstance(payload, Mapping):
+            continue
+        for path in (
+            ("search_plan", "search_queries"),
+            ("search_plan", "queries"),
+            ("result", "request", "queries"),
+            ("result", "search_plan", "search_queries"),
+            ("result", "report", "preflight", "apify_plan", "details", "planned_queries"),
+            ("result", "report", "preflight", "apify_plan", "input_preview", "planned_queries"),
+            ("result", "report", "preflight", "discovery", "lead_queries"),
+            ("apify", "details", "planned_queries"),
+            ("apify", "details", "queries"),
+            ("apify", "planned_queries"),
+            ("preflight", "apify_plan", "details", "planned_queries"),
+            ("preflight", "apify_plan", "input_preview", "planned_queries"),
+            ("apify_plan", "details", "planned_queries"),
+            ("apify_plan", "input_preview", "planned_queries"),
+            ("apify_plan", "planned_queries"),
+            ("discovery", "lead_queries"),
+            ("discovery", "queries"),
+            ("request", "queries"),
+        ):
+            value = _mapping_path(payload, *path)
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    if isinstance(item, str) and item.strip():
+                        cleaned = item.strip()
+                        if cleaned not in collected:
+                            collected.append(cleaned)
+    return collected
+
+
+def _mapping_path(payload: Mapping[str, Any], *path: str) -> Any:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(key)
+    return current
 
 
 def _replace_secretish(text: str) -> str:
