@@ -371,32 +371,41 @@ def _get_continuation_prompt(is_partial_stub: bool, dropped_tools: Optional[List
 def _maybe_route_sales_lead_request(agent, *, user_message: str, messages: List[Dict[str, Any]], conversation_history: List[Dict[str, Any]]):
     """Handle sales lead-discovery requests via the read-only leadgen export path."""
     try:
-        from hermes_cli.leadgen_agent_integration import route_sales_lead_request
+        from hermes_cli.leadgen_agent_orchestrator import (
+            load_pending_search,
+            orchestrate_sales_lead_request,
+            save_pending_search,
+        )
         from hermes_cli.profiles import get_active_profile_name
     except Exception:
         return None
 
     try:
-        reply = route_sales_lead_request(
+        decision = orchestrate_sales_lead_request(
             user_message,
-            language=getattr(agent, "language", "vi") or "vi",
             profile_name=get_active_profile_name(),
+            pending=load_pending_search(agent),
         )
     except Exception:
         logger.debug("sales lead routing failed open", exc_info=True)
         return None
 
-    if not reply:
+    if not decision:
         return None
 
-    messages.append({"role": "assistant", "content": reply})
+    if decision.clear_pending:
+        save_pending_search(agent, None)
+    elif decision.pending is not None:
+        save_pending_search(agent, decision.pending)
+
+    messages.append({"role": "assistant", "content": decision.reply})
     try:
         agent._persist_session(messages, conversation_history)
     except Exception:
         logger.debug("sales lead routing persist failed", exc_info=True)
 
     return {
-        "final_response": reply,
+        "final_response": decision.reply,
         "messages": messages,
         "api_calls": 0,
         "completed": True,

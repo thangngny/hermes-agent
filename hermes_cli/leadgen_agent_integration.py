@@ -36,9 +36,13 @@ DEFAULT_JSON = "data/output/hermes_leads.json"
 DEFAULT_CSV = "data/output/hermes_leads.csv"
 DEFAULT_DEMO = "data/output/demo_leads.md"
 DEFAULT_REPORT = "data/output/report.json"
-DEFAULT_MODE = "read_only"
-DEFAULT_ALLOW_DRY_RUN = False
+DEFAULT_MODE = "confirm_live"
+DEFAULT_ALLOW_DRY_RUN = True
 DEFAULT_ALLOW_LIVE = False
+DEFAULT_MAX_LIVE_RESULTS = 3
+DEFAULT_DEFAULT_COUNTRY = "VN"
+DEFAULT_DEFAULT_PROFILE = "dukick_tvc"
+DEFAULT_SPEND_LIMIT_USD = 1.0
 STALE_REPORT_AFTER = timedelta(hours=24)
 
 _SECRETISH_RE = re.compile(r"(?i)(api[_-]?key|token|secret|bearer|authorization)")
@@ -68,6 +72,10 @@ class LeadGenAgentSettings:
     mode: str = DEFAULT_MODE
     allow_dry_run: bool = DEFAULT_ALLOW_DRY_RUN
     allow_live: bool = DEFAULT_ALLOW_LIVE
+    max_live_results: int = DEFAULT_MAX_LIVE_RESULTS
+    default_country: str = DEFAULT_DEFAULT_COUNTRY
+    default_profile: str = DEFAULT_DEFAULT_PROFILE
+    spend_limit_usd: float = DEFAULT_SPEND_LIMIT_USD
 
     @property
     def repo_path(self) -> Path:
@@ -123,6 +131,10 @@ class LeadGenAgentSettings:
             mode=str(_pick("LEADGEN_AGENT_MODE", "mode", DEFAULT_MODE)),
             allow_dry_run=is_truthy_value(_pick("LEADGEN_AGENT_ALLOW_DRY_RUN", "allow_dry_run", DEFAULT_ALLOW_DRY_RUN), default=DEFAULT_ALLOW_DRY_RUN),
             allow_live=is_truthy_value(_pick("LEADGEN_AGENT_ALLOW_LIVE", "allow_live", DEFAULT_ALLOW_LIVE), default=DEFAULT_ALLOW_LIVE),
+            max_live_results=int(_pick("LEADGEN_AGENT_MAX_LIVE_RESULTS", "max_live_results", DEFAULT_MAX_LIVE_RESULTS) or DEFAULT_MAX_LIVE_RESULTS),
+            default_country=str(_pick("LEADGEN_AGENT_DEFAULT_COUNTRY", "default_country", DEFAULT_DEFAULT_COUNTRY)),
+            default_profile=str(_pick("LEADGEN_AGENT_DEFAULT_PROFILE", "default_profile", DEFAULT_DEFAULT_PROFILE)),
+            spend_limit_usd=float(_pick("LEADGEN_AGENT_SPEND_LIMIT_USD", "spend_limit_usd", DEFAULT_SPEND_LIMIT_USD) or DEFAULT_SPEND_LIMIT_USD),
         )
 
 
@@ -606,27 +618,14 @@ def route_sales_lead_request(
     profile_name: str = "",
     config: LeadGenAgentSettings | None = None,
 ) -> str | None:
-    if (profile_name or "").strip().lower() != "sales":
-        return None
-    if not looks_like_lead_discovery_request(user_text):
-        return None
-    if looks_like_live_request(user_text):
-        return refuse_live_execution_message(language=language)
+    from hermes_cli.leadgen_agent_orchestrator import route_sales_lead_request as _route
 
-    adapter = LeadGenAgentAdapter(config)
-    result = adapter.load_exports()
-    if result.errors:
-        missing_export = any("Chưa có file lead export" in error for error in result.errors)
-        if missing_export and looks_like_explicit_public_web_search_request(user_text):
-            return None
-        if missing_export:
-            return (
-                "Chưa có lead export từ lead-gen-agent. "
-                "Cần chạy lead-gen-agent trước hoặc xác nhận nếu muốn public web search."
-            )
-        return "\n".join(result.errors)
-
-    return adapter.summarize_for_user(language=language)
+    return _route(
+        user_text,
+        language=language,
+        profile_name=profile_name,
+        config=config,
+    )
 
 
 def refuse_live_execution_message(language: str = "vi") -> str:

@@ -641,6 +641,7 @@ class AIAgent:
         
         # Turn counter (added after reset_session_state was first written — #2635)
         self._user_turn_count = 0
+        self._pending_leadgen_search = None
 
         # Context engine reset/transition (works for built-in compressor and plugins)
         self._transition_context_engine_session(

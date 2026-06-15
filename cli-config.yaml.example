@@ -1240,7 +1240,7 @@ updates:
 
 
 # =============================================================================
-# Dukick LeadGen Agent integration (read-only)
+# Dukick LeadGen Agent integration
 # =============================================================================
 # leadgen_agent:
 #   repo: ~/CongThang/lead-gen-agent
@@ -1248,6 +1248,10 @@ updates:
 #   hermes_csv: data/output/hermes_leads.csv
 #   demo_summary: data/output/demo_leads.md
 #   report: data/output/report.json
-#   mode: read_only
-#   allow_dry_run: false
+#   mode: confirm_live
+#   allow_dry_run: true
 #   allow_live: false
+#   max_live_results: 3
+#   default_country: VN
+#   default_profile: dukick_tvc
+#   spend_limit_usd: 1.0

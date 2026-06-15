@@ -1666,6 +1666,21 @@ DEFAULT_CONFIG = {
             # "normalize_audio": True,
         },
     },
+
+    "leadgen_agent": {
+        "repo": "~/CongThang/lead-gen-agent",
+        "hermes_json": "data/output/hermes_leads.json",
+        "hermes_csv": "data/output/hermes_leads.csv",
+        "demo_summary": "data/output/demo_leads.md",
+        "report": "data/output/report.json",
+        "mode": "confirm_live",
+        "allow_dry_run": True,
+        "allow_live": False,
+        "max_live_results": 3,
+        "default_country": "VN",
+        "default_profile": "dukick_tvc",
+        "spend_limit_usd": 1.0,
+    },
     
     "stt": {
         "enabled": True,

@@ -7,6 +7,7 @@ from hermes_cli.leadgen_agent_integration import (
     LeadGenAgentSettings,
     refuse_live_execution_message,
 )
+from hermes_cli.leadgen_agent_orchestrator import LeadGenAgentRunner, LeadGenSearchRequest
 
 
 def cmd_leadgen(args) -> None:  # noqa: ANN001
@@ -29,6 +30,51 @@ def cmd_leadgen(args) -> None:  # noqa: ANN001
     command = getattr(args, "leadgen_command", None)
     if command in (None, "show", "summary", "read"):
         print(adapter.summarize_for_user(language=language, limit=limit))
+        return
+    if command == "plan":
+        runner = LeadGenAgentRunner(config)
+        requested = int(getattr(args, "max_results", 1) or 1)
+        max_results = min(requested, config.max_live_results)
+        request = LeadGenSearchRequest(
+            query=str(getattr(args, "query", "") or "").strip(),
+            country=str(getattr(args, "country", config.default_country) or config.default_country).strip(),
+            profile=str(getattr(args, "profile", config.default_profile) or config.default_profile).strip(),
+            max_results=max_results,
+            spend_limit_usd=float(config.spend_limit_usd),
+            requested_max_results=requested,
+            capped=requested > max_results,
+        )
+        result = runner.preflight_search(request)
+        print(
+            "\n".join(
+                [
+                    f"query={result.request.query}",
+                    f"country={result.request.country}",
+                    f"max_results={result.request.max_results}",
+                    f"estimate_usd={result.estimate_usd if result.estimate_usd is not None else 'unknown'}",
+                    f"ok={result.ok}",
+                    result.command_preview,
+                ]
+            )
+        )
+        return
+    if command == "run-confirmed":
+        if not getattr(args, "i_understand_this_may_cost_money", False):
+            print("Refusing live run. Re-run with --i-understand-this-may-cost-money after reviewing the preflight.")
+            return
+        runner = LeadGenAgentRunner(config)
+        requested = int(getattr(args, "max_results", 1) or 1)
+        max_results = min(requested, config.max_live_results)
+        request = LeadGenSearchRequest(
+            query=str(getattr(args, "query", "") or "").strip(),
+            country=str(getattr(args, "country", config.default_country) or config.default_country).strip(),
+            profile=str(getattr(args, "profile", config.default_profile) or config.default_profile).strip(),
+            max_results=max_results,
+            spend_limit_usd=float(config.spend_limit_usd),
+            requested_max_results=requested,
+            capped=requested > max_results,
+        )
+        print(runner.run_live_search(request, confirmation="xác nhận chạy live"))
         return
     if command == "status":
         result = adapter.load_exports()

@@ -196,8 +196,8 @@ What Hermes reads:
 
 Safe defaults:
 
-* `LEADGEN_AGENT_MODE=read_only`
-* `LEADGEN_AGENT_ALLOW_DRY_RUN=false`
+* `LEADGEN_AGENT_MODE=confirm_live`
+* `LEADGEN_AGENT_ALLOW_DRY_RUN=true`
 * `LEADGEN_AGENT_ALLOW_LIVE=false`
 
 Read the integration guide:
@@ -211,6 +211,13 @@ hermes leadgen show
 ```
 
 In the `sales` profile, lead-discovery requests such as `tìm lead` or `khảo sát thêm lead trên mạng` now read the latest local `lead-gen-agent` export first. Hermes only falls back to public web search when that export is missing or empty and the user explicitly asks for a public web search.
+
+Phase 2 also supports safe preflight for new searches. Example flow:
+
+1. User: `Tìm lead spa ở Việt Nam cho Dukick`
+2. Hermes: runs `smoke-plan` + `preflight`, shows the estimate, and asks for confirmation
+3. User: `xác nhận chạy live 1 lead`
+4. Hermes: runs the gated Apify search, regenerates the demo summary, and then reads the exported leads back into Hermes
 
 Hermes never auto-runs Apify or OpenAI from this integration. If you want to refresh leads, run `leadgen-agent` manually in its own repo first and then have Hermes read the exported files.
 
