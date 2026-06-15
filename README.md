@@ -210,6 +210,8 @@ Quick read-only summary command:
 hermes leadgen show
 ```
 
+In the `sales` profile, lead-discovery requests such as `tìm lead` or `khảo sát thêm lead trên mạng` now read the latest local `lead-gen-agent` export first. Hermes only falls back to public web search when that export is missing or empty and the user explicitly asks for a public web search.
+
 Hermes never auto-runs Apify or OpenAI from this integration. If you want to refresh leads, run `leadgen-agent` manually in its own repo first and then have Hermes read the exported files.
 
 ---

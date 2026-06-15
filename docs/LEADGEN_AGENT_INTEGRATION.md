@@ -62,6 +62,26 @@ hermes leadgen show
 
 or read the export through the adapter directly from code.
 
+## Sales Profile Routing
+
+Inside the `sales` profile, lead-discovery requests now prefer the read-only `lead-gen-agent` export path before any public web search flow.
+
+Examples:
+
+* `tìm lead`
+* `khảo sát thêm lead trên mạng`
+* `đọc lead mới nhất`
+* `lead mới cho Dukick`
+* `xem danh sách lead`
+
+Behavior:
+
+* Hermes reads the latest exported `hermes_leads.json` / `demo_leads.md` / `report.json` first.
+* Hermes returns the Vietnamese Dukick summary from that export.
+* Hermes does **not** auto-run Apify, Gmail, email, or any live lead refresh.
+* If the user explicitly asks for live search, Hermes refuses automatic execution and says manual confirmation is required.
+* Hermes only falls back to public web search when the export is missing or empty **and** the user explicitly asks for a public web search instead of the export flow.
+
 ## Current Safety Defaults
 
 These settings stay disabled unless you explicitly override them in your local environment:
@@ -76,6 +96,7 @@ These settings stay disabled unless you explicitly override them in your local e
 * Empty export: Hermes says there are no keep/review leads yet.
 * Missing `report.json`: Hermes can still read the leads, but shows a metadata warning.
 * Invalid JSON: Hermes returns a safe error instead of crashing.
+* Missing export during `sales` lead-search routing: Hermes returns `Chưa có lead export từ lead-gen-agent. Cần chạy lead-gen-agent trước hoặc xác nhận nếu muốn public web search.`
 
 ## Future Human-Confirmed Flow
 

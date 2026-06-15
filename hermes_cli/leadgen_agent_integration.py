@@ -45,6 +45,17 @@ _SECRETISH_RE = re.compile(r"(?i)(api[_-]?key|token|secret|bearer|authorization)
 _LIVE_REQUEST_RE = re.compile(
     r"(?i)\b(run\s*apify|apify\s*live|live\s*apify|\bquét mới\b|\btìm lead mới\b|chạy live|run live|live search)\b"
 )
+_LEAD_SUBJECT_RE = re.compile(
+    r"(?iu)\b(lead(?:-gen-agent)?|khách\s*hàng\s*tiềm\s*năng|prospect(?:s)?)\b"
+)
+_LEAD_ACTION_RE = re.compile(
+    r"(?iu)\b(tìm|khảo\s*sát|đọc|xem|show|read|summary|danh\s*sách|mới|mới\s*nhất|latest)\b"
+)
+_DUKICK_RE = re.compile(r"(?iu)\bdukick(?:\s*studio)?\b")
+_EXPLICIT_PUBLIC_WEB_SEARCH_RE = re.compile(
+    r"(?iu)\b(public\s+web\s+search|web\s+search|google\s+search|search\s+google|"
+    r"tìm\s+trên\s+google|tra\s+google|web\s+công\s+khai|tìm\s+trên\s+web\s+công\s+khai)\b"
+)
 
 
 @dataclass(frozen=True)
@@ -575,6 +586,47 @@ def _replace_secretish(text: str) -> str:
 
 def looks_like_live_request(text: str) -> bool:
     return bool(_LIVE_REQUEST_RE.search(text or ""))
+
+
+def looks_like_lead_discovery_request(text: str) -> bool:
+    text = text or ""
+    if _LEAD_SUBJECT_RE.search(text) and (_LEAD_ACTION_RE.search(text) or _DUKICK_RE.search(text)):
+        return True
+    return False
+
+
+def looks_like_explicit_public_web_search_request(text: str) -> bool:
+    return bool(_EXPLICIT_PUBLIC_WEB_SEARCH_RE.search(text or ""))
+
+
+def route_sales_lead_request(
+    user_text: str,
+    *,
+    language: str = "vi",
+    profile_name: str = "",
+    config: LeadGenAgentSettings | None = None,
+) -> str | None:
+    if (profile_name or "").strip().lower() != "sales":
+        return None
+    if not looks_like_lead_discovery_request(user_text):
+        return None
+    if looks_like_live_request(user_text):
+        return refuse_live_execution_message(language=language)
+
+    adapter = LeadGenAgentAdapter(config)
+    result = adapter.load_exports()
+    if result.errors:
+        missing_export = any("Chưa có file lead export" in error for error in result.errors)
+        if missing_export and looks_like_explicit_public_web_search_request(user_text):
+            return None
+        if missing_export:
+            return (
+                "Chưa có lead export từ lead-gen-agent. "
+                "Cần chạy lead-gen-agent trước hoặc xác nhận nếu muốn public web search."
+            )
+        return "\n".join(result.errors)
+
+    return adapter.summarize_for_user(language=language)
 
 
 def refuse_live_execution_message(language: str = "vi") -> str:

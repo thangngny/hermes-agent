@@ -3,16 +3,21 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 
+from agent.conversation_loop import _maybe_route_sales_lead_request
 from hermes_cli.leadgen_agent_integration import (
     LeadGenAgentAdapter,
     LeadGenAgentSettings,
     looks_like_live_request,
+    looks_like_lead_discovery_request,
+    looks_like_explicit_public_web_search_request,
     refuse_live_execution_message,
     respond_to_leadgen_request,
+    route_sales_lead_request,
 )
 from hermes_cli.leadgen_cmd import cmd_leadgen
 from hermes_cli.subcommands.leadgen import build_leadgen_parser
@@ -182,6 +187,9 @@ def test_read_only_mode_never_invokes_subprocess(monkeypatch, tmp_path):
 def test_live_request_returns_manual_confirmation_warning():
     assert looks_like_live_request("run apify live now") is True
     assert looks_like_live_request("show the summary") is False
+    assert looks_like_lead_discovery_request("khảo sát thêm lead trên mạng giúp tôi") is True
+    assert looks_like_lead_discovery_request("tìm khách hàng tiềm năng cho Dukick") is True
+    assert looks_like_explicit_public_web_search_request("hãy dùng public web search") is True
     warning = refuse_live_execution_message()
     assert "cần xác nhận thủ công" in warning
     assert "Apify" in warning
@@ -202,6 +210,117 @@ def test_live_request_handler_refuses_execution(monkeypatch, tmp_path):
     assert not called
     assert "Live Apify" in text
     assert "xác nhận thủ công" in text
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "khảo sát thêm lead trên mạng giúp tôi",
+        "tìm lead trên mạng giúp tôi",
+        "đọc lead mới nhất từ lead-gen-agent",
+    ],
+)
+def test_sales_profile_lead_requests_route_to_read_only_summary(monkeypatch, tmp_path, user_text):
+    repo = _copy_fixture_repo(tmp_path)
+    called = False
+
+    def boom(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("subprocess should not be called")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    text = route_sales_lead_request(user_text, profile_name="sales", config=_settings(repo))
+
+    assert not called
+    assert "Đã đọc kết quả từ lead-gen-agent" in text
+    assert "The Gym Group" in text
+
+
+def test_sales_profile_missing_export_returns_safe_message(tmp_path):
+    repo = tmp_path / "lead-gen-agent"
+    repo.mkdir()
+
+    text = route_sales_lead_request(
+        "tìm lead trên mạng giúp tôi",
+        profile_name="sales",
+        config=_settings(repo),
+    )
+
+    assert text == (
+        "Chưa có lead export từ lead-gen-agent. "
+        "Cần chạy lead-gen-agent trước hoặc xác nhận nếu muốn public web search."
+    )
+
+
+def test_explicit_public_web_search_only_bypasses_when_export_missing(tmp_path):
+    repo = tmp_path / "lead-gen-agent"
+    repo.mkdir()
+
+    text = route_sales_lead_request(
+        "hãy dùng public web search để tìm lead cho Dukick",
+        profile_name="sales",
+        config=_settings(repo),
+    )
+
+    assert text is None
+
+
+def test_explicit_public_web_search_still_prefers_export_when_available(tmp_path):
+    repo = _copy_fixture_repo(tmp_path)
+
+    text = route_sales_lead_request(
+        "hãy dùng public web search để tìm lead cho Dukick",
+        profile_name="sales",
+        config=_settings(repo),
+    )
+
+    assert text is not None
+    assert "The Gym Group" in text
+
+
+def test_non_sales_profile_does_not_intercept_lead_requests(tmp_path):
+    repo = _copy_fixture_repo(tmp_path)
+
+    text = route_sales_lead_request(
+        "tìm lead trên mạng giúp tôi",
+        profile_name="work",
+        config=_settings(repo),
+    )
+
+    assert text is None
+
+
+def test_conversation_loop_fast_path_skips_model_and_persists(monkeypatch):
+    persisted = {}
+    agent = SimpleNamespace(
+        language="vi",
+        _persist_session=lambda messages, conversation_history: persisted.update(
+            {"messages": list(messages), "conversation_history": conversation_history}
+        ),
+    )
+    messages = [{"role": "user", "content": "tìm lead trên mạng giúp tôi"}]
+
+    monkeypatch.setattr(
+        "hermes_cli.leadgen_agent_integration.route_sales_lead_request",
+        lambda *_args, **_kwargs: "Đã đọc kết quả từ lead-gen-agent tại /tmp/repo.",
+    )
+    monkeypatch.setattr("hermes_cli.profiles.get_active_profile_name", lambda: "sales")
+
+    result = _maybe_route_sales_lead_request(
+        agent,
+        user_message="tìm lead trên mạng giúp tôi",
+        messages=messages,
+        conversation_history=[],
+    )
+
+    assert result == {
+        "final_response": "Đã đọc kết quả từ lead-gen-agent tại /tmp/repo.",
+        "messages": messages,
+        "api_calls": 0,
+        "completed": True,
+    }
+    assert persisted["messages"][-1]["content"] == "Đã đọc kết quả từ lead-gen-agent tại /tmp/repo."
 
 
 def test_repo_path_expands_tilde():

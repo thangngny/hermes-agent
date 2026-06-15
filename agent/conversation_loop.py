@@ -368,6 +368,41 @@ def _get_continuation_prompt(is_partial_stub: bool, dropped_tools: Optional[List
         )
 
 
+def _maybe_route_sales_lead_request(agent, *, user_message: str, messages: List[Dict[str, Any]], conversation_history: List[Dict[str, Any]]):
+    """Handle sales lead-discovery requests via the read-only leadgen export path."""
+    try:
+        from hermes_cli.leadgen_agent_integration import route_sales_lead_request
+        from hermes_cli.profiles import get_active_profile_name
+    except Exception:
+        return None
+
+    try:
+        reply = route_sales_lead_request(
+            user_message,
+            language=getattr(agent, "language", "vi") or "vi",
+            profile_name=get_active_profile_name(),
+        )
+    except Exception:
+        logger.debug("sales lead routing failed open", exc_info=True)
+        return None
+
+    if not reply:
+        return None
+
+    messages.append({"role": "assistant", "content": reply})
+    try:
+        agent._persist_session(messages, conversation_history)
+    except Exception:
+        logger.debug("sales lead routing persist failed", exc_info=True)
+
+    return {
+        "final_response": reply,
+        "messages": messages,
+        "api_calls": 0,
+        "completed": True,
+    }
+
+
 def run_conversation(
     agent,
     user_message: str,
@@ -431,6 +466,15 @@ def run_conversation(
     _should_review_memory = _ctx.should_review_memory
     _plugin_user_context = _ctx.plugin_user_context
     _ext_prefetch_cache = _ctx.ext_prefetch_cache
+
+    _sales_lead_fast_path = _maybe_route_sales_lead_request(
+        agent,
+        user_message=user_message,
+        messages=messages,
+        conversation_history=conversation_history,
+    )
+    if _sales_lead_fast_path is not None:
+        return _sales_lead_fast_path
 
     # Main conversation loop counters (pure locals consumed by the loop below).
     api_call_count = 0
