@@ -512,6 +512,193 @@ def test_orchestrator_search_creates_pending_request(monkeypatch, tmp_path):
     assert "Estimate: khoảng $0.02" in decision.reply
 
 
+def test_orchestrator_follow_up_updates_query_and_replans(monkeypatch, tmp_path):
+    repo = _copy_fixture_repo(tmp_path)
+    pending = LeadGenPendingRequest(
+        request=LeadGenSearchRequest("spa", "VN", "dukick_tvc", 1, 1.0, 1),
+        estimate_usd=0.02,
+        preflight_ok=True,
+        command_preview="leadgen-agent search-leads ...",
+        created_at=1.0,
+    )
+    seen = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps({"apify": {"ok": True, "estimated_cost_usd": 0.03, "reasons": []}}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    decision = orchestrate_sales_lead_request(
+        "ngành bất động sản đi",
+        profile_name="sales",
+        config=_settings(repo),
+        pending=pending,
+    )
+
+    assert decision is not None
+    assert decision.pending is not None
+    assert decision.pending.request.query == "bất động sản"
+    assert decision.pending.request.country == "VN"
+    assert decision.pending.request.max_results == 1
+    assert "Em đã đổi ngành sang bất động sản" in decision.reply
+    assert seen == [
+        ["leadgen-agent", "smoke-plan", "--source", "apify"],
+        ["leadgen-agent", "preflight", "--source", "apify"],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("follow_up", "expected_query", "expected_country", "expected_max"),
+    [
+        ("đổi sang gym", "gym", "VN", 1),
+        ("tối đa 3 lead", "spa", "VN", 3),
+        ("ở US", "spa", "US", 1),
+    ],
+)
+def test_orchestrator_follow_up_updates_pending_request_fields(
+    monkeypatch,
+    tmp_path,
+    follow_up,
+    expected_query,
+    expected_country,
+    expected_max,
+):
+    repo = _copy_fixture_repo(tmp_path)
+    pending = LeadGenPendingRequest(
+        request=LeadGenSearchRequest("spa", "VN", "dukick_tvc", 1, 1.0, 1),
+        estimate_usd=0.02,
+        preflight_ok=True,
+        command_preview="leadgen-agent search-leads ...",
+        created_at=1.0,
+    )
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps({"apify": {"ok": True, "estimated_cost_usd": 0.02, "reasons": []}}),
+            stderr="",
+        ),
+    )
+    decision = orchestrate_sales_lead_request(
+        follow_up,
+        profile_name="sales",
+        config=_settings(repo),
+        pending=pending,
+    )
+
+    assert decision is not None
+    assert decision.pending is not None
+    assert decision.pending.request.query == expected_query
+    assert decision.pending.request.country == expected_country
+    assert decision.pending.request.max_results == expected_max
+
+
+def test_confirmation_after_follow_up_uses_latest_pending_request(monkeypatch, tmp_path):
+    repo = _copy_fixture_repo(tmp_path)
+    settings = LeadGenAgentSettings(**{**_settings(repo).__dict__, "allow_live": True})
+    pending = LeadGenPendingRequest(
+        request=LeadGenSearchRequest("spa", "VN", "dukick_tvc", 1, 1.0, 1),
+        estimate_usd=0.02,
+        preflight_ok=True,
+        command_preview="leadgen-agent search-leads ...",
+        created_at=1.0,
+    )
+    seen = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append((cmd, kwargs["env"].get("LEAD_QUERY"), kwargs["env"].get("TARGET_COUNTRY"), kwargs["env"].get("APIFY_MAX_RESULTS")))
+        if cmd[1] in {"smoke-plan", "preflight"}:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"apify": {"ok": True, "estimated_cost_usd": 0.02, "reasons": []}}), stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"ok": True}), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    updated = orchestrate_sales_lead_request(
+        "ngành bất động sản đi",
+        profile_name="sales",
+        config=settings,
+        pending=pending,
+    )
+    assert updated is not None and updated.pending is not None
+
+    decision = orchestrate_sales_lead_request(
+        "xác nhận chạy live 1 lead",
+        profile_name="sales",
+        config=settings,
+        pending=updated.pending,
+    )
+
+    assert decision is not None
+    assert decision.clear_pending is True
+    assert ["leadgen-agent", "search-leads", "--profile", "dukick_tvc", "--source", "apify", "--country", "VN", "--query", "bất động sản", "--max-results", "1", "--live"] == seen[2][0]
+    assert seen[2][1:] == ("bất động sản", "VN", "1")
+
+
+def test_follow_up_stays_in_leadgen_preflight_when_pending_exists(monkeypatch, tmp_path):
+    repo = _copy_fixture_repo(tmp_path)
+    pending = LeadGenPendingRequest(
+        request=LeadGenSearchRequest("gym", "VN", "dukick_tvc", 1, 1.0, 1),
+        estimate_usd=0.02,
+        preflight_ok=True,
+        command_preview="leadgen-agent search-leads ...",
+        created_at=1.0,
+    )
+    called = []
+
+    def fake_run(cmd, **kwargs):
+        called.append(cmd)
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps({"apify": {"ok": True, "estimated_cost_usd": 0.02, "reasons": []}}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    decision = orchestrate_sales_lead_request(
+        "spa đi",
+        profile_name="sales",
+        config=_settings(repo),
+        pending=pending,
+    )
+
+    assert decision is not None
+    assert decision.pending is not None
+    assert decision.pending.request.query == "spa"
+    assert called == [
+        ["leadgen-agent", "smoke-plan", "--source", "apify"],
+        ["leadgen-agent", "preflight", "--source", "apify"],
+    ]
+
+
+def test_explicit_public_web_search_is_still_allowed_with_pending(tmp_path):
+    repo = tmp_path / "lead-gen-agent"
+    repo.mkdir()
+    pending = LeadGenPendingRequest(
+        request=LeadGenSearchRequest("spa", "VN", "dukick_tvc", 1, 1.0, 1),
+        estimate_usd=0.02,
+        preflight_ok=True,
+        command_preview="leadgen-agent search-leads ...",
+        created_at=1.0,
+    )
+
+    decision = orchestrate_sales_lead_request(
+        "không dùng lead-gen-agent, search web thường",
+        profile_name="sales",
+        config=_settings(repo),
+        pending=pending,
+    )
+
+    assert decision is None
+
+
 def test_orchestrator_refuses_email_and_openai_live(tmp_path):
     settings = _settings(_copy_fixture_repo(tmp_path))
 
@@ -563,6 +750,40 @@ def test_conversation_loop_fast_path_skips_model_and_persists(monkeypatch):
 def test_repo_path_expands_tilde():
     settings = LeadGenAgentSettings(repo="~/CongThang/lead-gen-agent")
     assert str(settings.repo_path).endswith("CongThang/lead-gen-agent")
+
+
+def test_runtime_settings_can_enable_allow_live_from_profile_config(monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.leadgen_agent_integration.load_config",
+        lambda: {
+            "leadgen_agent": {
+                "allow_live": True,
+                "allow_dry_run": True,
+                "max_live_results": 3,
+                "default_country": "VN",
+                "default_profile": "dukick_tvc",
+            }
+        },
+    )
+    monkeypatch.delenv("LEADGEN_AGENT_ALLOW_LIVE", raising=False)
+
+    settings = LeadGenAgentSettings.from_runtime()
+
+    assert settings.allow_live is True
+    assert settings.allow_dry_run is True
+    assert settings.max_live_results == 3
+
+
+def test_runtime_env_override_still_wins_over_profile_config(monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.leadgen_agent_integration.load_config",
+        lambda: {"leadgen_agent": {"allow_live": True}},
+    )
+    monkeypatch.setenv("LEADGEN_AGENT_ALLOW_LIVE", "false")
+
+    settings = LeadGenAgentSettings.from_runtime()
+
+    assert settings.allow_live is False
 
 
 def test_cli_command_uses_adapter_and_parser(tmp_path, capsys):

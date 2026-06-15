@@ -58,7 +58,8 @@ _LEAD_ACTION_RE = re.compile(
 _DUKICK_RE = re.compile(r"(?iu)\bdukick(?:\s*studio)?\b")
 _EXPLICIT_PUBLIC_WEB_SEARCH_RE = re.compile(
     r"(?iu)\b(public\s+web\s+search|web\s+search|google\s+search|search\s+google|"
-    r"tìm\s+trên\s+google|tra\s+google|web\s+công\s+khai|tìm\s+trên\s+web\s+công\s+khai)\b"
+    r"tìm\s+trên\s+google|tra\s+google|web\s+công\s+khai|tìm\s+trên\s+web\s+công\s+khai|"
+    r"search\s+web\s+thường|không\s+dùng\s+lead-gen-agent)\b"
 )
 
 

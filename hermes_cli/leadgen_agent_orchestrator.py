@@ -32,6 +32,7 @@ _READ_LATEST_RE = re.compile(
 _MAX_RESULTS_RE = re.compile(r"(?iu)\b(\d+)\s*lead\b")
 _COUNTRY_VN_RE = re.compile(r"(?iu)\b(việt\s*nam|vn|hà\s*nội|hồ\s*chí\s*minh|sài\s*gòn)\b")
 _COUNTRY_US_RE = re.compile(r"(?iu)\b(us|usa|mỹ|hoa\s*kỳ|united\s*states)\b")
+_QUERY_REFINEMENT_RE = re.compile(r"(?iu)\b(ngành|đổi|chuyển|sang)\b")
 
 _QUERY_ALIASES: tuple[tuple[str, str], ...] = (
     ("thẩm mỹ viện", "thẩm mỹ viện"),
@@ -338,6 +339,23 @@ def orchestrate_sales_lead_request(
             return None
         return LeadGenRouteDecision(runner.read_latest(language=language, limit=5), clear_pending=False)
 
+    if pending is not None and not looks_like_explicit_public_web_search_request(text):
+        refined_request = refine_pending_search_request(text, pending=pending, config=config)
+        if refined_request is not None:
+            preflight = runner.preflight_search(refined_request)
+            pending_request = LeadGenPendingRequest(
+                request=refined_request,
+                estimate_usd=preflight.estimate_usd,
+                preflight_ok=preflight.ok,
+                command_preview=preflight.command_preview,
+                created_at=time.time(),
+            )
+            return LeadGenRouteDecision(
+                _build_refinement_reply(previous=pending.request, preflight=preflight, config=config),
+                pending=pending_request,
+                clear_pending=False,
+            )
+
     if not looks_like_search_request(text):
         return None
 
@@ -457,6 +475,14 @@ def _extract_country(text: str, *, default: str) -> str:
     return default
 
 
+def _extract_country_override(text: str) -> str | None:
+    if _COUNTRY_US_RE.search(text or ""):
+        return "US"
+    if _COUNTRY_VN_RE.search(text or ""):
+        return "VN"
+    return None
+
+
 def _extract_max_results(text: str) -> int:
     match = _MAX_RESULTS_RE.search(text or "")
     if not match:
@@ -466,6 +492,77 @@ def _extract_max_results(text: str) -> int:
     except ValueError:
         return 1
     return max(value, 1)
+
+
+def refine_pending_search_request(
+    text: str,
+    *,
+    pending: LeadGenPendingRequest,
+    config: LeadGenAgentSettings,
+) -> LeadGenSearchRequest | None:
+    query = _extract_followup_query(text) or pending.request.query
+    country = _extract_country_override(text) or pending.request.country
+    requested_max_results = pending.request.requested_max_results
+    if _MAX_RESULTS_RE.search(text or ""):
+        requested_max_results = _extract_max_results(text)
+
+    max_results = requested_max_results
+    capped = False
+    if max_results > config.max_live_results:
+        max_results = config.max_live_results
+        capped = True
+
+    updated = LeadGenSearchRequest(
+        query=query,
+        country=country,
+        profile=pending.request.profile,
+        max_results=max_results,
+        spend_limit_usd=pending.request.spend_limit_usd,
+        requested_max_results=requested_max_results,
+        capped=capped,
+    )
+    if updated == pending.request:
+        return None
+    return updated
+
+
+def _extract_followup_query(text: str) -> str:
+    lowered = (text or "").lower().strip()
+    if not lowered:
+        return ""
+    for alias, canonical in _QUERY_ALIASES:
+        if alias in lowered:
+            return canonical
+    if not _QUERY_REFINEMENT_RE.search(lowered):
+        return ""
+    cleaned = re.sub(r"(?iu)\b(ngành|đổi|chuyển|sang|tìm|khảo\s*sát|search|đi|lead|cho|dukick(?:\s*studio)?)\b", " ", lowered)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .,:;-")
+    return cleaned[:80].strip()
+
+
+def _build_refinement_reply(
+    *,
+    previous: LeadGenSearchRequest,
+    preflight: LeadGenPreflightResult,
+    config: LeadGenAgentSettings,
+) -> str:
+    updates: list[str] = []
+    current = preflight.request
+    if current.query != previous.query:
+        updates.append(f"đổi ngành sang {current.query}")
+    if current.country != previous.country:
+        updates.append(f"đổi quốc gia sang {current.country}")
+    if current.requested_max_results != previous.requested_max_results:
+        updates.append(f"đổi số lead tối đa sang {current.requested_max_results}")
+
+    if not updates:
+        return _build_preflight_reply(preflight, config=config)
+
+    prefix = "Em đã " + " và ".join(updates) + " và chuẩn bị tìm lead bằng Apify:"
+    body = _build_preflight_reply(preflight, config=config).split("\n", 1)
+    if len(body) == 2:
+        return prefix + "\n\n" + body[1]
+    return prefix
 
 
 def _safe_json_loads(text: str) -> dict[str, Any] | None:
