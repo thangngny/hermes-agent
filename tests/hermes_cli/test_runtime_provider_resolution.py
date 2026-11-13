@@ -2775,3 +2775,31 @@ def test_host_derived_key_helper_basic_cases():
     for k in ("DEEPSEEK_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY",
               "OPENAI_API_KEY", "OPENROUTER_API_KEY"):
         _os.environ.pop(k, None)
+
+
+def test_resolve_runtime_provider_vertex_uses_adc_helper(monkeypatch):
+    monkeypatch.setattr(
+        rp,
+        "_get_model_config",
+        lambda: {"provider": "vertex", "default": "gemini-3.1-pro-preview"},
+    )
+    monkeypatch.setattr(
+        rp,
+        "_resolve_vertex_runtime",
+        lambda **kwargs: {
+            "provider": "vertex",
+            "api_mode": "chat_completions",
+            "base_url": "vertex://google",
+            "api_key": "adc-token",
+            "source": "adc",
+            "requested_provider": kwargs["requested_provider"],
+        },
+    )
+
+    resolved = rp.resolve_runtime_provider(requested="vertex")
+
+    assert resolved["provider"] == "vertex"
+    assert resolved["api_mode"] == "chat_completions"
+    assert resolved["base_url"] == "vertex://google"
+    assert resolved["api_key"] == "adc-token"
+    assert resolved["requested_provider"] == "vertex"

@@ -1575,6 +1575,46 @@ class TestCopilotACPStreamingDecision:
         assert _use_streaming is True
 
 
+class TestVertexStreamingDecision:
+    """Verify Vertex transport skips the streaming branch up front."""
+
+    def test_provider_name_triggers_non_streaming(self):
+        agent = SimpleNamespace(
+            provider="vertex",
+            base_url="vertex://google",
+            _disable_streaming=False,
+        )
+
+        _use_streaming = True
+        if getattr(agent, "_disable_streaming", False):
+            _use_streaming = False
+        elif (
+            agent.provider == "vertex"
+            or str(agent.base_url or "").lower().startswith("vertex://")
+        ):
+            _use_streaming = False
+
+        assert _use_streaming is False
+
+    def test_vertex_base_url_triggers_non_streaming_even_without_provider_name(self):
+        agent = SimpleNamespace(
+            provider="custom",
+            base_url="vertex://google",
+            _disable_streaming=False,
+        )
+
+        _use_streaming = True
+        if getattr(agent, "_disable_streaming", False):
+            _use_streaming = False
+        elif (
+            agent.provider == "vertex"
+            or str(agent.base_url or "").lower().startswith("vertex://")
+        ):
+            _use_streaming = False
+
+        assert _use_streaming is False
+
+
 class TestBedrockIamStreamingFallback:
     """bedrock_converse streaming branch: IAM denial of
     InvokeModelWithResponseStream falls back to converse() inline and sets

@@ -42,10 +42,12 @@ vertex = VertexProfile(
     # Marker URL interpreted by GeminiNativeClient as Vertex mode.
     base_url="vertex://google",
     auth_type="api_key",
-    default_aux_model="gemini-2.5-flash",
+    default_aux_model="gemini-3.1-pro-preview",
     fallback_models=(
-        "gemini-2.5-flash",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools",
         "gemini-2.5-pro",
+        "gemini-2.5-flash",
         "gemini-2.0-flash",
     ),
 )

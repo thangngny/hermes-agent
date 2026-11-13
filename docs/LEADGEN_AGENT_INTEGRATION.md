@@ -125,6 +125,15 @@ These settings stay disabled unless you explicitly override them in your local e
 * `LEADGEN_AGENT_DEFAULT_PROFILE=dukick_tvc`
 * `LEADGEN_AGENT_SPEND_LIMIT_USD=1`
 
+For a dedicated `sales` profile, you can persist:
+
+```yaml
+leadgen_agent:
+  allow_live: true
+```
+
+This only unlocks the ability to run a confirmed live search. It does **not** auto-run Apify, and Hermes still requires an explicit confirmation phrase on every live run.
+
 ## Missing or Empty Export Behavior
 
 * Missing `hermes_leads.json`: Hermes says the export file is missing and asks you to run `lead-gen-agent` first.

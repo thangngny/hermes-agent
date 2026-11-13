@@ -247,8 +247,10 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "gemini-3.1-flash-lite-preview",
     ],
     "vertex": [
-        "gemini-2.5-flash",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools",
         "gemini-2.5-pro",
+        "gemini-2.5-flash",
         "gemini-2.0-flash",
     ],
     "google-gemini-cli": [

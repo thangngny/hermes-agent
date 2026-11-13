@@ -219,6 +219,8 @@ Phase 2 also supports safe preflight for new searches. Example flow:
 3. User: `xác nhận chạy live 1 lead`
 4. Hermes: runs the gated Apify search, regenerates the demo summary, and then reads the exported leads back into Hermes
 
+If you keep a dedicated `sales` profile, you can persist `leadgen_agent.allow_live: true` in that profile's `config.yaml` so Hermes does not need the env var each time. This still does not bypass the per-request human confirmation gate.
+
 Hermes never auto-runs Apify or OpenAI from this integration. If you want to refresh leads, run `leadgen-agent` manually in its own repo first and then have Hermes read the exported files.
 
 ---

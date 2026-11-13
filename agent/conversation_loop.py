@@ -1037,6 +1037,15 @@ def run_conversation(
                 # session instead of re-failing every retry.
                 if getattr(agent, "_disable_streaming", False):
                     _use_streaming = False
+                elif (
+                    agent.provider == "vertex"
+                    or str(agent.base_url or "").lower().startswith("vertex://")
+                ):
+                    # Vertex transport currently runs through a non-streaming
+                    # path in Hermes. Trying the streaming branch first only
+                    # produces a predictable "stream not supported" retry
+                    # before falling back, which adds latency and noisy logs.
+                    _use_streaming = False
                 # CopilotACPClient communicates via subprocess stdio and
                 # returns a plain SimpleNamespace — not an iterable
                 # stream.  Mirror the ACP exclusion used for Responses

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -258,6 +259,83 @@ def _parse_api_mode(raw: Any) -> Optional[str]:
         if normalized in _VALID_API_MODES:
             return normalized
     return None
+
+
+def _resolve_vertex_runtime(
+    *,
+    model_cfg: Optional[Dict[str, Any]] = None,
+    explicit_api_key: Optional[str] = None,
+    explicit_base_url: Optional[str] = None,
+    requested_provider: str = "vertex",
+) -> Dict[str, Any]:
+    model_cfg = model_cfg or _get_model_config()
+    base_url = (
+        (explicit_base_url or "").strip()
+        or str(model_cfg.get("base_url") or "").strip()
+        or "vertex://google"
+    ).rstrip("/")
+    api_key = (explicit_api_key or "").strip()
+    if api_key:
+        return {
+            "provider": "vertex",
+            "api_mode": "chat_completions",
+            "base_url": base_url,
+            "api_key": api_key,
+            "source": "explicit",
+            "requested_provider": requested_provider,
+        }
+
+    project = (os.getenv("GOOGLE_CLOUD_PROJECT") or "").strip()
+    if not project:
+        raise AuthError(
+            "Vertex mode requires GOOGLE_CLOUD_PROJECT to be set.",
+            provider="vertex",
+            code="vertex_project_missing",
+        )
+
+    try:
+        from google.auth import default as google_auth_default
+        from google.auth.transport.requests import Request
+    except Exception as exc:
+        raise AuthError(
+            "Vertex mode requires google-auth runtime packages inside Hermes.",
+            provider="vertex",
+            code="vertex_google_auth_missing",
+        ) from exc
+
+    try:
+        creds, _project = google_auth_default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        creds.refresh(Request())
+    except Exception as exc:
+        raise AuthError(
+            "Vertex mode requires a refreshable ADC access token. Run gcloud auth application-default login or mount a valid service account.",
+            provider="vertex",
+            code="vertex_adc_refresh_failed",
+        ) from exc
+
+    token = str(getattr(creds, "token", "") or "").strip()
+    if not token:
+        raise AuthError(
+            "Vertex mode resolved ADC but no access token was returned.",
+            provider="vertex",
+            code="vertex_token_missing",
+        )
+
+    expires_at = getattr(creds, "expiry", None)
+    if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    return {
+        "provider": "vertex",
+        "api_mode": "chat_completions",
+        "base_url": base_url,
+        "api_key": token,
+        "source": "adc",
+        "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else None,
+        "requested_provider": requested_provider,
+    }
 
 
 def _maybe_apply_codex_app_server_runtime(
@@ -1269,6 +1347,7 @@ def resolve_runtime_provider(
     behavior (api_mode derived from config).
     """
     requested_provider = resolve_requested_provider(requested)
+    model_cfg = _get_model_config()
 
     # Azure Anthropic short-circuit: when explicitly targeting an Azure endpoint
     # with provider="anthropic", bypass _resolve_named_custom_runtime (which would
@@ -1298,12 +1377,20 @@ def resolve_runtime_provider(
     if requested_provider == "azure-foundry":
         azure_runtime = _resolve_azure_foundry_runtime(
             requested_provider=requested_provider,
-            model_cfg=_get_model_config(),
+            model_cfg=model_cfg,
             explicit_api_key=explicit_api_key,
             explicit_base_url=explicit_base_url,
             target_model=target_model,
         )
         return azure_runtime
+
+    if requested_provider == "vertex":
+        return _resolve_vertex_runtime(
+            model_cfg=model_cfg,
+            explicit_api_key=explicit_api_key,
+            explicit_base_url=explicit_base_url,
+            requested_provider=requested_provider,
+        )
 
     custom_runtime = _resolve_named_custom_runtime(
         requested_provider=requested_provider,
@@ -1319,7 +1406,6 @@ def resolve_runtime_provider(
         explicit_api_key=explicit_api_key,
         explicit_base_url=explicit_base_url,
     )
-    model_cfg = _get_model_config()
     explicit_runtime = _resolve_explicit_runtime(
         provider=provider,
         requested_provider=requested_provider,
